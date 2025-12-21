@@ -1,0 +1,7 @@
+day_idx,dia,bitmask_6
+0,Lunes,100000
+1,Martes,010000
+2,Miercoles,001000
+3,Jueves,000100
+4,Viernes,000010
+5,Sabado,000001
