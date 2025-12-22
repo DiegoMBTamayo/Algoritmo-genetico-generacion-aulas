@@ -1,144 +1,136 @@
-# run_demo.py
-from typing import Dict
+# run.py
 import pandas as pd
-
 from src.config import GAConfig, TURN_SLOTS
 from src.data_loader import load_data
 from src.model import CourseOffering
 from src.domains import build_offer_domains
 from src.initial_population import build_initial_population
-from src.evaluation import evaluate
+from src.ga import GeneticSolver 
 
 def build_offers(bundle) -> list[CourseOffering]:
-    # Join clase_fija con cursos para traer nombre/ciclo/turno_sugerido
-    cf = bundle.clase_fija.merge(bundle.cursos, on="cod_curso", how="left")
-
+    cf = bundle.clase_fija.merge(bundle.cursos, left_on="cod_curso", right_on="ID_Curso", how="left")
     offers: list[CourseOffering] = []
     for _, r in cf.iterrows():
         tipo = str(r["tipo_hora"]).strip().upper()
         is_lab = (tipo == "L")
+        if tipo == "T": wh = 3
+        elif tipo == "P": wh = 2
+        else: wh = 2
 
-        # weekly_hours: AJUSTA esto a tu criterio real (por grupo horario/plan)
-        # Por defecto: T=3, P=2, L=2 (cambia si tu doc/plan indica otra cosa)
-        if tipo == "T":
-            wh = 3
-        elif tipo == "P":
-            wh = 2
-        else:
-            wh = 2
+        try:
+            ciclo_val = int(r.get("Ciclo", 1))
+        except:
+            ciclo_val = 1
+        
+        if ciclo_val <= 3: turno_calc = "M"
+        elif ciclo_val <= 7: turno_calc = "T"
+        else: turno_calc = "N"
 
         offers.append(CourseOffering(
             cod_curso=str(r["cod_curso"]),
-            nombre=str(r.get("nombre", "")),
-            ciclo=int(r.get("ciclo", 1)) if pd.notna(r.get("ciclo", 1)) else 1,
-            turno=str(r.get("turno_sugerido", "M")),
-            grupo_horario=str(r.get("grupo_horario", "01S")),
+            nombre=str(r.get("Nombre", "Curso")),
+            ciclo=ciclo_val,
+            turno=turno_calc,
+            grupo_horario=str(r.get("grupo_horario", "01S")), # Asegura que esto exista en tu CSV clase_fija
             tipo_hora=tipo,
             weekly_hours=wh,
             is_lab=is_lab
         ))
     return offers
 
-def build_baseline_lab(bundle) -> Dict[str, dict]:
-    """
-    Para labs: si en programacion_2012B.csv el curso usa aula 'L..' lo fijamos.
-    Nota: aquí el mapeo de 'hora_inicio' a 'slot' depende de tu grilla.
-    Dejo un mapeo simple por ejemplo: si horas.csv tiene slot_id y rango_hora, puedes refinar.
-    """
-    baseline = {}
-    prog = bundle.programacion.copy()
+def build_baseline_lab(bundle):
+    return {} 
 
-    # Normaliza día
-    prog["dia_norm"] = prog["dia"].astype(str).str.upper().str.strip()
+# --- VISUALIZACIÓN CORREGIDA (ETIQUETA + 30 BITS) ---
 
-    # room_id desde cod_aula
-    # si cod_aula es tipo "L6" o "A12", extraemos dígitos
-    prog["room_id"] = prog["cod_aula"].astype(str).str.replace("A", "", regex=False).str.replace("L", "", regex=False)
-    prog["room_id"] = pd.to_numeric(prog["room_id"], errors="coerce").fillna(0).astype(int)
+def to_binary_string(val, bits):
+    if val is None: return "0" * bits
+    return format(val, f'0{bits}b')
 
-    # teacher_id desde cod_docente
-    prog["teacher_id"] = prog["cod_docente"].astype(str).str.replace("D", "", regex=False)
-    prog["teacher_id"] = pd.to_numeric(prog["teacher_id"], errors="coerce").fillna(0).astype(int)
+def day_to_bitmask(day_idxs):
+    mask = ["0"] * 6
+    for d in day_idxs:
+        if 0 <= d < 6: mask[d] = "1"
+    return "".join(mask)
 
-    # OJO: start/length aquí es un placeholder.
-    # Si quieres exactitud: crea un mapeo hora_inicio->slot con horas.csv.
-    def simple_time_to_slot(h: str) -> int:
-        h = str(h).strip()
-        # ejemplo súper simple: 08:00->0, 09:00->1...
-        try:
-            hh = int(h.split(":")[0])
-            return max(0, min(14, hh - 8))
-        except:
-            return 0
+def print_chromosome_representation(individual, offers):
+    print("\n" + "="*80)
+    print("REPRESENTACIÓN DE CROMOSOMA - FORMATO: ETIQUETA + BITS (30 bits)")
+    print("ETIQUETA: Curso Grupo Tipo")
+    print("BITS:     Docente(6) Días(6) Aula1(4) Hora1(5) Aula2(4) Hora2(5)")
+    print("="*80)
 
-    def simple_len(h_ini: str, h_fin: str) -> int:
-        try:
-            hi = int(str(h_ini).split(":")[0])
-            hf = int(str(h_fin).split(":")[0])
-            L = max(1, hf - hi)
-            return min(5, L)
-        except:
-            return 2
+    for i, (gene, off) in enumerate(zip(individual.genes, offers)):
+        if i >= 20: break 
+        
+        # 1. Construir la ETIQUETA (Parte Fija)
+        # Ejemplo: C01 01S T
+        etiqueta = f"{off.cod_curso} {off.grupo_horario} {off.tipo_hora}"
+        
+        # 2. Construir el CROMOSOMA (Parte Variable - 30 bits)
+        doc_bin = to_binary_string(gene.teacher_id, 6)
+        dias_bin = day_to_bitmask(gene.days)
+        aula1_bin = to_binary_string(gene.room1, 4)
+        hora1_bin = to_binary_string(gene.start1, 5)
+        aula2_bin = to_binary_string(gene.room2, 4)
+        hora2_bin = to_binary_string(gene.start2, 5)
 
-    # filtrar labs por aula que empieza con "L"
-    labs = prog[prog["cod_aula"].astype(str).str.upper().str.startswith("L")]
-    for cod_curso, sub in labs.groupby("cod_curso"):
-        # toma la primera fila como baseline fija
-        row = sub.iloc[0]
-        baseline[str(cod_curso)] = {
-            "day_idx": 1,  # AJUSTA con mapping real de día (Martes=1 etc.)
-            "start": simple_time_to_slot(row["hora_inicio"]),
-            "length": simple_len(row["hora_inicio"], row["hora_termino"]),
-            "room_id": int(row["room_id"]),
-            "teacher_id": int(row["teacher_id"])
-        }
-    return baseline
+        # Concatenamos todo junto
+        cromosoma = f"{doc_bin}{dias_bin}{aula1_bin}{hora1_bin}{aula2_bin}{hora2_bin}"
+
+        # Imprimir alineado
+        print(f"{etiqueta:<12} {cromosoma}")
+
+    print("="*80 + "\n")
+
+# --- MAIN ---
 
 def main():
     cfg = GAConfig()
-
-    # 1) Cargar data (descomprime los CSV en ./data)
+    print("Cargando datos...")
     bundle = load_data("data")
+    
+    if "es_laboratorio" not in bundle.aulas.columns:
+        bundle.aulas["es_laboratorio"] = bundle.aulas["cod_tipo"].astype(str).str.startswith("L")
 
-    # 2) Construir offerings (clase fija + cursos)
     offers = build_offers(bundle)
-
-    # 3) Baseline labs (si existe)
+    print(f"Se generaron {len(offers)} ofertas (genes).")
+    
     baseline_lab = build_baseline_lab(bundle)
 
-    # 4) Dominios
+    print("Construyendo dominios...")
     domains = build_offer_domains(
         offers=offers,
         aulas_df=bundle.aulas,
-        pref_df=bundle.pref_docente_curso,
+        docentes_df=bundle.docentes, 
         turn_slots=TURN_SLOTS,
         n_days=cfg.N_DAYS,
         baseline_lab=baseline_lab
     )
 
-    # 5) Población inicial (doc menciona 102, pero prueba con 20)
-    pop = build_initial_population(
-        offers=offers,
-        domains=domains,
-        n_slots_per_day=cfg.N_SLOTS_PER_DAY,
-        pop_size=20
-    )
+    POP_SIZE = 50       
+    GENERATIONS = 100   
+    MUTATION_RATE = 0.1 
 
-    # 6) Evaluar
-    # tamaños máximos (ajusta a tu data real)
-    n_cycles = max(int(o.ciclo) for o in offers) if offers else 10
+    print("Generando población inicial...")
+    pop = build_initial_population(offers, domains, cfg.N_SLOTS_PER_DAY, POP_SIZE)
+
+    print(f"Iniciando evolución ({GENERATIONS} gens)...")
+    
+    n_cycles = 10 
     n_rooms = int(bundle.aulas["room_id"].max()) + 1
-    n_teachers = int(bundle.docentes["teacher_id"].max())
+    if "tid_num" not in bundle.docentes.columns:
+        bundle.docentes["tid_num"] = bundle.docentes["cod_docente"].str.replace("D", "", regex=False).astype(int)
+    n_teachers = int(bundle.docentes["tid_num"].max()) + 1
 
-    for ind in pop:
-        evaluate(ind, offers, n_cycles=n_cycles, n_rooms=n_rooms, n_teachers=n_teachers, cfg=cfg)
+    solver = GeneticSolver(offers, domains, cfg, n_cycles, n_rooms, n_teachers)
+    best_ind = solver.evolve(pop, GENERATIONS, MUTATION_RATE)
 
-    best = max(pop, key=lambda x: x.fitness)
-    print("Mejor penalización:", best.penalty, "fitness:", best.fitness)
-
-    # Muestra primeras 5 asignaciones
-    for off, g in list(zip(offers, best.genes))[:5]:
-        print(off.cod_curso, off.tipo_hora, "-> doc", g.teacher_id, "day(s)", g.days, "room1", g.room1, "start", g.start1, "len", g.len1, "frozen", g.frozen)
+    print("\n--- MEJOR SOLUCIÓN ---")
+    print(f"Fitness: {best_ind.fitness:.5f} | Penalización: {best_ind.penalty}")
+    
+    # Llamada a la visualización corregida
+    print_chromosome_representation(best_ind, offers)
 
 if __name__ == "__main__":
     main()
