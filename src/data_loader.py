@@ -10,7 +10,6 @@ class DataBundle:
     aulas: pd.DataFrame
     cursos: pd.DataFrame
     clase_fija: pd.DataFrame
-    # Se eliminó pref_docente_curso
     programacion: pd.DataFrame
     dias: pd.DataFrame
     horas: pd.DataFrame
@@ -22,21 +21,19 @@ def load_data(data_dir: str) -> DataBundle:
     aulas = pd.read_csv(f"{data_dir}/aulas.csv")
     cursos = pd.read_csv(f"{data_dir}/cursos.csv")
     clase_fija = pd.read_csv(f"{data_dir}/clase_fija.csv")
-    # Se eliminó la lectura de preferencia_docente_curso.csv
     prog = pd.read_csv(f"{data_dir}/programacion_2012B.csv")
     dias = pd.read_csv(f"{data_dir}/dias.csv")
     horas = pd.read_csv(f"{data_dir}/horas.csv")
 
-    # Normalizaciones útiles
-    # Extraer ID numérico de docentes (D01 -> 1)
+    # --- NORMALIZACIÓN DE IDs ---
+    
+    # 1. Docentes: D01 -> 1
     docentes["teacher_id"] = docentes["cod_docente"].str.replace("D", "", regex=False).astype(int)
     
-    # Extraer ID numérico de aulas (A1 -> 1, L1 -> 1, etc.)
-    # Nota: Asegúrate de que esta lógica sea compatible con cómo defines los IDs en domains.py
-    aulas["room_id"] = aulas["cod_aula"].astype(str).str.replace("A", "", regex=False).str.replace("L", "", regex=False).str.replace("E", "", regex=False)
-    aulas["room_id"] = pd.to_numeric(aulas["room_id"], errors="coerce").fillna(0).astype(int)
-
-    # Se eliminó la normalización de preferencias
+    # 2. Aulas: CORRECCIÓN CRÍTICA
+    # Antes: A1->1, L1->1 (Causaba colisión y ocultaba laboratorios)
+    # Ahora: Asignamos un ID secuencial único (0, 1, 2...) basado en el orden de la tabla
+    aulas["room_id"] = range(len(aulas))
 
     return DataBundle(
         docentes=docentes,

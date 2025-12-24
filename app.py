@@ -23,8 +23,6 @@ st.markdown("""
         font-weight: bold;
         padding: 10px;
     }
-    
-    /* Estilos para tablas oscuras */
     .dark-table {
         width: 100%;
         border-collapse: collapse;
@@ -48,7 +46,6 @@ st.markdown("""
         padding: 4px 6px;
         color: #ddd;
     }
-    
     .dark-info-box {
         background-color: #1e1e1e;
         border: 1px solid #444;
@@ -60,7 +57,6 @@ st.markdown("""
         max-height: 250px;
         overflow-y: auto;
     }
-    
     .section-header {
         font-family: Arial, sans-serif;
         font-weight: bold;
@@ -70,7 +66,6 @@ st.markdown("""
         border-bottom: 2px solid #ff4b4b;
         padding-bottom: 5px;
     }
-
     .schedule-table {
         width: 100%;
         border-collapse: collapse;
@@ -160,11 +155,8 @@ def create_schedule_matrix(best_ind, offers, bundle, filter_mode, filter_val, di
                             if 0 <= h < TOTAL_SLOTS:
                                 matrix[h, d] += get_html_card(off.nombre, off.grupo_horario, doc_code, room2_code, off.tipo_hora)
     
-    # Usar el mapa dinámico para las columnas
     cols = [dias_map.get(i, f"Dia {i}") for i in range(6)]
     df_mat = pd.DataFrame(matrix, columns=cols)
-    # Usar el mapa dinámico para el índice (horas)
-    # Aseguramos que cubra hasta 17 slots
     df_mat.index = [horas_map.get(i, f"Slot {i}") for i in range(TOTAL_SLOTS)]
     return df_mat
 
@@ -177,7 +169,6 @@ def calculate_dynamic_details(individual, offers, bundle):
         bundle.docentes["tid_num"] = bundle.docentes["cod_docente"].str.replace("D", "", regex=False).astype(int)
     n_teachers = int(bundle.docentes["tid_num"].max()) + 1
 
-    # Ajustado a 17 slots
     TOTAL_SLOTS = 17
     count_cycle = np.zeros((n_cycles + 1, 6, TOTAL_SLOTS), dtype=int)
     count_room = np.zeros((n_rooms + 1, 6, TOTAL_SLOTS), dtype=int)
@@ -240,19 +231,15 @@ def calculate_dynamic_details(individual, offers, bundle):
 
 # --- MAIN APP ---
 def main():
-    # 1. Cargar Datos
     if 'bundle' not in st.session_state:
         st.session_state.bundle = load_data("data")
     bundle = st.session_state.bundle
 
-    # 2. Generar Mapeos Dinámicos
     dias_df = bundle.dias
     dias_map = dict(zip(dias_df['day_idx'], dias_df['dia']))
-    
     horas_df = bundle.horas
     horas_map = dict(zip(horas_df['slot_id'], horas_df['rango_hora']))
 
-    # --- BARRA LATERAL ---
     with st.sidebar:
         st.title("🧬 Menú Principal")
         st.markdown("---")
@@ -266,57 +253,44 @@ def main():
         st.markdown("---")
         st.info("Sistema de Optimización de Horarios\nAlgoritmo Genético")
 
-    # 1. REALIZAR ASIGNACIÓN (CON CRUD)
+    # 1. REALIZAR ASIGNACIÓN
     if page == "Realizar Asignación":
         st.header("📋 Realizar Asignación y Gestión de Datos")
-        
-        # --- AVISO DE GUARDADO CORRECTO ---
-        # Verificamos si existe la bandera en session state
         if st.session_state.get('show_save_success', False):
             st.success("¡Datos actualizados y recargados correctamente!")
-            # Apagamos la bandera para que no salga siempre
             st.session_state['show_save_success'] = False
 
         st.caption("Puede editar, agregar o eliminar registros en las tablas. Recuerde GUARDAR los cambios.")
-
-        # Contenedor para las tablas editables
         tab_listas = st.tabs(["Docentes", "Aulas", "Cursos", "Clase Fija"])
         
         with tab_listas[0]:
             cols_csv_docentes = ["cod_docente", "cod_dispo", "ap_paterno", "ap_materno", "nombres"]
             edited_docentes = st.data_editor(bundle.docentes[cols_csv_docentes], num_rows="dynamic", key="editor_docentes", height=250, use_container_width=True)
-
         with tab_listas[1]:
             cols_csv_aulas = ["cod_aula", "cod_tipo", "capacidad"]
             edited_aulas = st.data_editor(bundle.aulas[cols_csv_aulas], num_rows="dynamic", key="editor_aulas", height=250, use_container_width=True)
-
         with tab_listas[2]:
             cols_csv_cursos = ["ID_Curso", "Nombre", "Ciclo"]
             edited_cursos = st.data_editor(bundle.cursos[cols_csv_cursos], num_rows="dynamic", key="editor_cursos", height=250, use_container_width=True)
-
         with tab_listas[3]:
             cols_csv_fija = ["cod_curso", "grupo_horario", "tipo_hora"]
             edited_fija = st.data_editor(bundle.clase_fija[cols_csv_fija], num_rows="dynamic", key="editor_fija", height=250, use_container_width=True)
 
-        # BOTÓN PARA GUARDAR CAMBIOS EN CSV
         if st.button("💾 Guardar Cambios en Archivos CSV"):
             try:
                 edited_docentes.to_csv("data/docentes.csv", index=False)
                 edited_aulas.to_csv("data/aulas.csv", index=False)
                 edited_cursos.to_csv("data/cursos.csv", index=False)
                 edited_fija.to_csv("data/clase_fija.csv", index=False)
-                
-                # Recargar el bundle
                 st.session_state.bundle = load_data("data")
-                # Activar bandera de éxito
                 st.session_state['show_save_success'] = True
                 st.rerun()
             except Exception as e:
                 st.error(f"Error al guardar archivos: {e}")
 
         st.divider()
+        pop_size, generations, mutation_rate = 102, 100, 0.1
 
-        # BOTÓN DE EJECUCIÓN
         if st.button("🚀 CREAR POBLACIÓN INICIAL"):
             with st.status("Ejecutando proceso...", expanded=True) as status:
                 st.write("Generando ofertas...")
@@ -324,43 +298,30 @@ def main():
                 baseline = build_baseline_lab(bundle)
                 aulas_calc = bundle.aulas.copy()
                 aulas_calc["es_laboratorio"] = aulas_calc["cod_tipo"].astype(str).str.startswith("L")
-                
                 domains = build_offer_domains(offers, aulas_calc, bundle.docentes, TURN_SLOTS, 6, baseline)
-                # Params fijos
-                pop_size = 102
-                generations = 100
-                mutation_rate = 0.1
-                
                 initial_pop = build_initial_population(offers, domains, 15, pop_size)
                 st.session_state.initial_pop_list = initial_pop 
-                
                 n_cycles = 10
                 n_rooms = int(bundle.aulas["room_id"].max()) + 1
                 if "tid_num" not in bundle.docentes.columns:
                     bundle.docentes["tid_num"] = bundle.docentes["cod_docente"].str.replace("D", "", regex=False).astype(int)
                 n_teachers = int(bundle.docentes["tid_num"].max()) + 1
-                
                 cfg = GAConfig()
                 solver = GeneticSolver(offers, domains, cfg, n_cycles, n_rooms, n_teachers)
-                
                 st.write("Optimizando horarios (Evolución)...")
                 best_ind = solver.evolve(initial_pop, generations, mutation_rate)
-                
                 st.session_state.best_ind = best_ind
                 st.session_state.offers = offers
                 st.session_state.solver = solver
                 st.session_state.has_run = True
                 status.update(label="¡Población Generada y Optimizada!", state="complete", expanded=False)
 
-        # MUESTRA POBLACIÓN INICIAL
         if st.session_state.get("has_run", False):
             st.divider()
-            st.subheader("3. Muestra de Población Inicial (Aleatoria)")
+            st.subheader("Muestra de Población Inicial (Aleatoria)")
             st.caption("A continuación se muestran los cromosomas generados en la población inicial.")
-            
             sample_ind = st.session_state.initial_pop_list[0]
             offers = st.session_state.offers
-            
             pop_data = []
             for g, off in zip(sample_ind.genes, offers):
                 bits_doc = to_binary_string(g.teacher_id, 6)
@@ -373,7 +334,6 @@ def main():
                 else:
                     bits_a2 = "0000"
                     bits_h2 = "00000"
-                
                 pop_data.append({
                     "Curso": off.cod_curso,
                     "Grupo": off.grupo_horario,
@@ -384,14 +344,11 @@ def main():
                     "Aula2(4b)": bits_a2,
                     "Hora2(5b)": bits_h2
                 })
-            
             st.dataframe(pd.DataFrame(pop_data), height=400, use_container_width=True)
 
     # 2. PROCESOS ADICIONALES
     elif page == "Procesos Adicionales":
         st.header("⚙️ Procesos Adicionales")
-        
-        # Botón para re-generar
         if st.button("🔄 Generar Nueva Población"):
             if 'bundle' in st.session_state:
                 with st.status("Re-generando optimización...", expanded=True) as status:
@@ -424,25 +381,12 @@ def main():
             solver = st.session_state.solver
             best = st.session_state.best_ind
             offers = st.session_state.offers
-
             gene_stats, total_fit_sum, pen_doc, pen_ciclo, pen_aula = calculate_dynamic_details(best, offers, bundle)
 
             st.markdown("<div class='section-header'>Población y Probabilidades de Selección (Detalle Global)</div>", unsafe_allow_html=True)
-            
-            html_main = """<table class="dark-table">
-<thead>
-<tr>
-<th>Curso</th>
-<th>Grupo</th>
-<th>Docente</th>
-<th>Cromosoma (Docente | Días | Aula | Hora)</th>
-<th>Penal</th>
-<th>Aptitud</th>
-<th>P.Selec</th>
-<th>P.Acumul</th>
-</tr>
-</thead>
-<tbody>"""
+            html_main = """<table class="dark-table"><thead><tr>
+<th>Curso</th><th>Grupo</th><th>Docente</th><th>Cromosoma (Docente | Días | Aula | Hora)</th><th>Penal</th><th>Aptitud</th><th>P.Selec</th><th>P.Acumul</th>
+</tr></thead><tbody>"""
             p_acum = 0.0
             for stat in gene_stats[:50]:
                 idx = stat['idx']
@@ -459,29 +403,15 @@ def main():
                 full_bits = f"{bits_doc} {bits_dias} {bits_bloque1}{bits_bloque2}"
                 p_selec = stat['aptitud'] / total_fit_sum if total_fit_sum > 0 else 0.0
                 p_acum += p_selec
-                
-                html_main += f"""<tr>
-<td>{off.cod_curso}</td>
-<td>{off.grupo_horario}</td>
-<td>{doc_code}</td>
-<td>{full_bits}</td>
-<td>{int(stat['penal'])}</td>
-<td>{stat['aptitud']:.6f}</td>
-<td>{p_selec:.6f}</td>
-<td>{p_acum:.6f}</td>
-</tr>"""
+                html_main += f"""<tr><td>{off.cod_curso}</td><td>{off.grupo_horario}</td><td>{doc_code}</td><td>{full_bits}</td><td>{int(stat['penal'])}</td><td>{stat['aptitud']:.6f}</td><td>{p_selec:.6f}</td><td>{p_acum:.6f}</td></tr>"""
             html_main += "</tbody></table>"
             st.markdown(f"<div style='max_height:400px; overflow-y:auto;'>{html_main}</div>", unsafe_allow_html=True)
             
             st.markdown("<div class='section-header'>Subpoblaciones (Turnos)</div>", unsafe_allow_html=True)
-            
             def render_unified_turn_table(turno_key, title):
                 st.subheader(f"► {title}")
                 if turno_key in solver.subpopulations:
-                    html_sub = """<table class="dark-table">
-                    <thead>
-                    <tr><th>Carga</th><th>Curso</th><th>Grupo</th><th>Docente</th><th>Cromosoma (Bits)</th><th>P.Sel</th></tr>
-                    </thead><tbody>"""
+                    html_sub = """<table class="dark-table"><thead><tr><th>Carga</th><th>Curso</th><th>Grupo</th><th>Docente</th><th>Cromosoma (Bits)</th><th>P.Sel</th></tr></thead><tbody>"""
                     has_data = False
                     for horas, idxs in solver.subpopulations[turno_key].items():
                         for idx in idxs[:10]:
@@ -500,21 +430,11 @@ def main():
                                 bits_2 = " 000000000"
                             full_bits = f"{bits_doc} {bits_dias} {bits_1}{bits_2}"
                             p_sel = stat['aptitud'] / total_fit_sum if total_fit_sum > 0 else 0.0
-                            html_sub += f"""<tr>
-                            <td>{horas} Hrs</td>
-                            <td>{off.cod_curso}</td>
-                            <td>{off.grupo_horario}</td>
-                            <td>{doc_code}</td>
-                            <td>{full_bits}</td>
-                            <td>{p_sel:.6f}</td>
-                            </tr>"""
+                            html_sub += f"""<tr><td>{horas} Hrs</td><td>{off.cod_curso}</td><td>{off.grupo_horario}</td><td>{doc_code}</td><td>{full_bits}</td><td>{p_sel:.6f}</td></tr>"""
                     html_sub += "</tbody></table>"
-                    if has_data:
-                        st.markdown(html_sub, unsafe_allow_html=True)
-                    else:
-                        st.info("Sin datos.")
-                else:
-                    st.info("No hay datos para este turno.")
+                    if has_data: st.markdown(html_sub, unsafe_allow_html=True)
+                    else: st.info("Sin datos.")
+                else: st.info("No hay datos para este turno.")
 
             render_unified_turn_table("M", "Turno Mañana")
             render_unified_turn_table("T", "Turno Tarde")
@@ -525,11 +445,9 @@ def main():
             def make_list_html(items, empty_msg):
                 if not items: return f"<div class='dark-info-box' style='color:#88dd88;'>{empty_msg}</div>"
                 html = "<div class='dark-info-box'>"
-                for item in items[:20]:
-                    html += f"{item}<br>"
+                for item in items[:20]: html += f"{item}<br>"
                 html += "</div>"
                 return html
-
             with c1:
                 st.markdown("**Penalidad Docente**")
                 st.markdown(make_list_html(pen_doc, "0 Conflictos"), unsafe_allow_html=True)
@@ -562,10 +480,16 @@ def main():
         else:
             offers = st.session_state.offers
             best = st.session_state.best_ind
-            aula_ids = sorted(bundle.aulas["room_id"].unique())
-            aula_options = {rid: get_room_code(bundle, rid) for rid in aula_ids}
+            
+            # --- CORRECCIÓN DE ORDENAMIENTO (AULAS Y LABS) ---
+            # Ordenamos por código (A1, A2... E1... L1...) en lugar de por ID numérico
+            aulas_sorted = bundle.aulas.sort_values("cod_aula")
+            aula_ids = aulas_sorted["room_id"].tolist()
+            aula_options = dict(zip(aulas_sorted["room_id"], aulas_sorted["cod_aula"]))
+            
             sel_aula = st.selectbox("Seleccione Aula:", options=aula_ids, format_func=lambda x: aula_options[x])
-            if sel_aula:
+            
+            if sel_aula is not None:
                 df_a = create_schedule_matrix(best, offers, bundle, "Aula", sel_aula, dias_map, horas_map)
                 st.markdown(df_a.to_html(escape=False, classes="schedule-table"), unsafe_allow_html=True)
 
