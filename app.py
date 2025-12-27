@@ -8,7 +8,7 @@ import random
 from src.data_loader import load_data
 from src.config import GAConfig, load_config
 from src.domains import build_offer_domains
-from src.initial_population import build_initial_population
+from src.initial_population import build_initial_population, random_gene_for_offer
 from src.ga import GeneticSolver
 from src.evaluation import evaluate
 from src.operators import repair_individual, sigma_scale, interleaved_crossover, mutate_swap
@@ -27,90 +27,98 @@ st.markdown("""
         font-weight: bold;
         padding: 5px;
         height: 50px;
+        border-radius: 5px;
+        border: none;
     }
-    .dark-table {
-        width: 100%;
+    .stButton>button:hover {
+        background-color: #ff3333;
+    }
+    .styled-table {
         border-collapse: collapse;
-        font-family: 'Courier New', monospace;
-        font-size: 11px;
-        background-color: #262730; 
-        color: #fafafa;
-        border: 1px solid #444;
-        margin-bottom: 0px;
+        margin: 10px 0;
+        font-size: 0.85em;
+        font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        min-width: 400px;
+        width: 100%;
+        box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+        border-radius: 5px 5px 0 0;
+        overflow: hidden;
     }
-    .dark-table th {
-        background-color: #333;
-        border: 1px solid #555;
-        padding: 6px;
+    .styled-table thead tr {
+        background-color: #009879;
+        color: #ffffff;
         text-align: left;
         font-weight: bold;
-        color: #fff;
+    }
+    .styled-table th, .styled-table td {
+        padding: 8px 12px;
+    }
+    .styled-table tbody tr {
+        border-bottom: 1px solid #dddddd;
+        background-color: #ffffff;
+        color: #333;
+    }
+    .styled-table tbody tr:nth-of-type(even) {
+        background-color: #f3f3f3;
+    }
+    .styled-table tbody tr:last-of-type {
+        border-bottom: 2px solid #009879;
+    }
+    .scroll-table-container {
+        height: 300px;
+        overflow-y: auto;
+        border: 1px solid #ddd;
+        background-color: #fff;
+        margin-bottom: 20px;
+        border-radius: 5px;
+    }
+    .scroll-table-container thead th {
         position: sticky;
         top: 0;
-        z-index: 1;
+        z-index: 2;
+        background-color: #009879;
     }
-    .dark-table td {
-        border: 1px solid #444;
-        padding: 4px 6px;
-        color: #ddd;
-    }
-    .scroll-container {
-        max-height: 300px;
-        overflow-y: auto;
-        border: 1px solid #444;
-        background-color: #262730;
-        margin-bottom: 15px;
-    }
-    .dark-info-box {
-        background-color: #1e1e1e;
-        border: 1px solid #444;
-        padding: 10px;
-        font-family: 'Courier New', monospace;
-        font-size: 11px;
-        margin-bottom: 10px;
-        color: #eee;
-        max-height: 150px;
-        overflow-y: auto;
-    }
-    .section-header {
-        font-family: Arial, sans-serif;
-        font-weight: bold;
-        color: #eee;
-        margin-top: 20px;
-        margin-bottom: 10px;
-        border-bottom: 2px solid #ff4b4b;
-        padding-bottom: 5px;
-    }
-    .read-only-input {
-        background-color: #333;
-        color: #fff;
-        padding: 5px;
-        border: 1px solid #555;
-        border-radius: 4px;
-        width: 100%;
-        text-align: center;
-        font-weight: bold;
-    }
-    .schedule-table {
-        width: 100%;
-        border-collapse: collapse;
-        font-family: Arial, sans-serif;
-        font-size: 12px;
-    }
-    .schedule-table th {
-        background-color: #f0f2f6;
+    .metric-box {
+        background-color: #ffffff;
         border: 1px solid #ddd;
-        padding: 8px;
+        border-radius: 8px;
+        padding: 15px;
         text-align: center;
+        box-shadow: 0 2px 5px rgba(0,0,0,0.05);
+    }
+    .metric-value {
+        font-size: 28px;
         font-weight: bold;
         color: #333;
     }
-    .schedule-table td {
-        border: 1px solid #ddd;
-        padding: 4px;
-        vertical-align: top;
+    .metric-label {
+        font-size: 12px;
+        color: #666;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+    }
+    .metric-highlight {
+        color: #d32f2f;
+    }
+    .penalty-list {
+        height: 150px;
+        overflow-y: auto;
         background-color: #fff;
-        color: #000;
+        border: 1px solid #ddd;
+        padding: 10px;
+        font-size: 11px;
+        font-family: monospace;
+        color: #333;
+        border-radius: 4px;
+    }
+    .subpop-header {
+        background-color: #eee;
+        padding: 8px;
+        font-weight: bold;
+        color: #333;
+        border-left: 5px solid #009879;
+        margin-top: 15px;
+        margin-bottom: 5px;
     }
     </style>
 """, unsafe_allow_html=True)
@@ -133,20 +141,16 @@ def get_room_code(bundle, room_id):
 
 def get_html_card(nombre, grupo, docente, aula, tipo):
     return (
-        f"<div style='border:1px solid #999; margin-bottom:4px; font-family:sans-serif; overflow:hidden;'>"
-        f"<div style='background-color:#ffffcc; color:#000; padding:2px 4px; font-size:11px; font-weight:bold; border-bottom:1px solid #ccc; text-align:left;'>"
-        f"{nombre}"
-        f"</div>"
-        f"<div style='background-color:#fff; color:#333; padding:2px 4px; font-size:10px; text-align:left;'>"
-        f"<b>{grupo}</b> {docente} {aula} <span style='float:right; color:#666;'>({tipo})</span>"
-        f"</div>"
+        f"<div style='border:1px solid #ccc; margin-bottom:4px; font-family:sans-serif; overflow:hidden; border-radius:3px;'>"
+        f"<div style='background-color:#e0f7fa; color:#006064; padding:2px 4px; font-size:10px; font-weight:bold; border-bottom:1px solid #b2ebf2;'>{nombre}</div>"
+        f"<div style='background-color:#fff; color:#333; padding:2px 4px; font-size:9px;'><b>{grupo}</b> {docente}<br>{aula} ({tipo})</div>"
         f"</div>"
     )
 
 def create_schedule_matrix(best_ind, offers, bundle, filter_mode, filter_val, dias_map, horas_map):
-    cfg = st.session_state.get("cfg", GAConfig())
-    TOTAL_SLOTS = cfg.n_slots_per_day
-    matrix = np.full((TOTAL_SLOTS, cfg.n_days), "", dtype=object)
+    cfg_local = st.session_state.get("cfg", GAConfig())
+    TOTAL_SLOTS = cfg_local.n_slots_per_day 
+    matrix = np.full((TOTAL_SLOTS, cfg_local.n_days), "", dtype=object)
     
     for g, off in zip(best_ind.genes, offers):
         show = False
@@ -160,7 +164,7 @@ def create_schedule_matrix(best_ind, offers, bundle, filter_mode, filter_val, di
         
         if filter_mode == "Ciclo" or g.room1 == filter_val:
             for d in [g.days[0]]:
-                if 0 <= d < cfg.n_days:
+                if 0 <= d < cfg_local.n_days:
                     for h in range(g.start1, g.start1 + g.len1):
                         if 0 <= h < TOTAL_SLOTS:
                             matrix[h, d] += get_html_card(off.nombre, off.grupo_horario, doc_code, room1_code, off.tipo_hora)
@@ -169,42 +173,38 @@ def create_schedule_matrix(best_ind, offers, bundle, filter_mode, filter_val, di
             if filter_mode == "Ciclo" or g.room2 == filter_val:
                 room2_code = get_room_code(bundle, g.room2)
                 for d in [g.days[1]]:
-                    if 0 <= d < cfg.n_days:
+                    if 0 <= d < cfg_local.n_days:
                         for h in range(g.start2, g.start2 + g.len2):
                             if 0 <= h < TOTAL_SLOTS:
                                 matrix[h, d] += get_html_card(off.nombre, off.grupo_horario, doc_code, room2_code, off.tipo_hora)
     
-    cols = [dias_map.get(i, f"Dia {i}") for i in range(cfg.n_days)]
+    cols = [dias_map.get(i, f"Dia {i}") for i in range(cfg_local.n_days)]
     df_mat = pd.DataFrame(matrix, columns=cols)
     df_mat.index = [horas_map.get(i, f"Slot {i}") for i in range(TOTAL_SLOTS)]
     return df_mat
 
-# --- HELPER: MATRICES DE CONFLICTO (NUEVO) ---
+# --- HELPER: MATRICES DE CONFLICTO ---
 def get_conflict_matrices(individual, offers, bundle):
-    """Retorna las 3 matrices numéricas de ocupación: [Ciclo, Aula, Docente]"""
-    cfg = st.session_state.get("cfg", GAConfig())
+    cfg_local = st.session_state.get("cfg", GAConfig())
     n_cycles = 10
     n_rooms = int(bundle.aulas["room_id"].max()) + 1
     n_teachers = int(bundle.docentes["teacher_id"].max()) + 1
-    TOTAL_SLOTS = cfg.n_slots_per_day
+    TOTAL_SLOTS = cfg_local.n_slots_per_day
 
-    # Matrices de conteo (0=Libre, 1=Ocupado, >1=Conflicto)
-    count_cycle = np.zeros((n_cycles + 1, cfg.n_days, TOTAL_SLOTS), dtype=int)
-    count_room = np.zeros((n_rooms + 1, cfg.n_days, TOTAL_SLOTS), dtype=int)
-    count_teach = np.zeros((n_teachers + 1, cfg.n_days, TOTAL_SLOTS), dtype=int)
+    count_cycle = np.zeros((n_cycles + 1, cfg_local.n_days, TOTAL_SLOTS), dtype=int)
+    count_room = np.zeros((n_rooms + 1, cfg_local.n_days, TOTAL_SLOTS), dtype=int)
+    count_teach = np.zeros((n_teachers + 1, cfg_local.n_days, TOTAL_SLOTS), dtype=int)
 
     for i, (g, off) in enumerate(zip(individual.genes, offers)):
         cyc = int(off.ciclo) - 1
-        # Bloque 1
         for h in range(g.start1, g.start1 + g.len1):
-            if h < TOTAL_SLOTS and g.days[0] < cfg.n_days:
+            if h < TOTAL_SLOTS and g.days[0] < cfg_local.n_days:
                 count_cycle[cyc, g.days[0], h] += 1
                 count_room[g.room1, g.days[0], h] += 1
                 count_teach[g.teacher_id, g.days[0], h] += 1
-        # Bloque 2
         if len(g.days) > 1 and g.room2 is not None:
             for h in range(g.start2, g.start2 + g.len2):
-                if h < TOTAL_SLOTS and g.days[1] < cfg.n_days:
+                if h < TOTAL_SLOTS and g.days[1] < cfg_local.n_days:
                     count_cycle[cyc, g.days[1], h] += 1
                     count_room[g.room2, g.days[1], h] += 1
                     count_teach[g.teacher_id, g.days[1], h] += 1
@@ -213,18 +213,15 @@ def get_conflict_matrices(individual, offers, bundle):
 
 # --- HELPER: CÁLCULO DINÁMICO DE PENALIDADES ---
 def calculate_dynamic_details(individual, offers, bundle):
-    # Reutilizamos la lógica de matrices para calcular penalidades
     count_cycle, count_room, count_teach = get_conflict_matrices(individual, offers, bundle)
-    
     cfg = st.session_state.get("cfg", GAConfig())
     TOTAL_SLOTS = cfg.n_slots_per_day
+    
     gene_stats = []
     penalties_docente = []
     penalties_doc_ciclo = []
     penalties_doc_aula = []
-    total_fitness_sum = 0
     
-    # Recorrer de nuevo para asignar culpas a cada gen
     for i, (g, off) in enumerate(zip(individual.genes, offers)):
         pen_gen = 0
         pen_teacher = 0
@@ -249,7 +246,6 @@ def calculate_dynamic_details(individual, offers, bundle):
         
         pen_gen = pen_cycle + pen_room + pen_teacher
         aptitud = 1.0 / (1.0 + pen_gen)
-        total_fitness_sum += aptitud
         
         gene_stats.append({"idx": i, "penal": pen_gen, "aptitud": aptitud})
         
@@ -258,22 +254,42 @@ def calculate_dynamic_details(individual, offers, bundle):
         if pen_cycle > 0: penalties_doc_ciclo.append(f"{off.cod_curso} (Ciclo {off.ciclo}): {pen_cycle}")
         if pen_room > 0: penalties_doc_aula.append(f"{off.cod_curso} {doc_code}: {pen_room}")
 
-    return gene_stats, total_fitness_sum, penalties_docente, penalties_doc_ciclo, penalties_doc_aula
+    return gene_stats, 0, penalties_docente, penalties_doc_ciclo, penalties_doc_aula
 
-# --- LOGICA DE EVOLUCIÓN UN PASO ---
-def run_single_generation(solver, population, mutation_rate, offers, cfg):
+# --- LOGICA DE EVOLUCIÓN OPTIMIZADA (TORNEO) ---
+def tournament_selection(population, k=5):
+    candidates = random.sample(population, k)
+    return max(candidates, key=lambda x: x.fitness)
+
+def smart_mutate(individual, offers, domains, mutation_rate, cfg):
+    if random.random() > mutation_rate:
+        return
+
+    idx = random.randint(0, len(individual.genes) - 1)
+    if individual.genes[idx].frozen: return
+
+    # Mutación simple (aleatoria) para mantener diversidad y no caer en mínimos locales
+    new_gene = random_gene_for_offer(offers[idx], domains[idx], cfg.n_slots_per_day)
+    individual.genes[idx] = new_gene
+
+def run_smart_generation(solver, population, mutation_rate, offers, cfg):
     sigma_scale(population, cfg)
-    best_global = max(population, key=lambda x: x.fitness)
+    pop_size = len(population)
+    elite_count = max(int(pop_size * 0.20), 2)
+
     population.sort(key=lambda x: x.fitness, reverse=True)
-    new_pop = [copy.deepcopy(best_global)]
-    while len(new_pop) < len(population):
-        p1 = solver.selection_roulette(population)
-        p2 = solver.selection_roulette(population)
+    new_pop = [copy.deepcopy(ind) for ind in population[:elite_count]]
+
+    while len(new_pop) < pop_size:
+        p1 = tournament_selection(population, k=5)
+        p2 = tournament_selection(population, k=5)
+
         child = interleaved_crossover(p1, p2)
         repair_individual(child, offers, solver.domains, cfg)
         mutate_swap(child, mutation_rate)
         evaluate(child, offers, solver.n_cycles, solver.n_rooms, solver.n_teachers, cfg)
         new_pop.append(child)
+
     sigma_scale(new_pop, cfg)
     return new_pop
 
@@ -292,21 +308,21 @@ def main():
     horas_df = bundle.horas
     horas_map = dict(zip(horas_df['slot_id'], horas_df['rango_hora']))
 
-    # INICIALIZACIÓN DE ESTADO
     if 'generation_count' not in st.session_state: st.session_state.generation_count = 0
     if 'history' not in st.session_state: st.session_state.history = []
     if 'population' not in st.session_state: st.session_state.population = None
     if 'best_ind' not in st.session_state: st.session_state.best_ind = None
     if 'initial_pop_list' not in st.session_state: st.session_state.initial_pop_list = None 
 
-    # --- BARRA LATERAL ---
+    APP_CONFIG = cfg
+
     with st.sidebar:
         st.title("🧬 Menú Principal")
         st.markdown("---")
         page = st.radio("Ir a la sección:", [
             "Realizar Asignación", 
             "Procesos Adicionales", 
-            "Matrices de Conflictos", # NUEVA PESTAÑA
+            "Matrices de Conflictos",
             "Horario por Ciclo", 
             "Horario por Aula", 
             "Horarios en General"
@@ -349,16 +365,17 @@ def main():
                 st.error(f"Error al guardar archivos: {e}")
 
         st.divider()
-        if st.button("🚀 INICIAR PROCESO COMPLETO (Reset)"):
+        if st.button(" CREAR POBLACION INICIAL (PROBABILISTICA)"):
             st.session_state.population = None
             st.session_state.generation_count = 0
             st.session_state.history = []
             
-            with st.status("Iniciando...", expanded=True) as status:
+            with st.status("Generando ofertas y poblacion inicial...", expanded=True) as status:
                 offers = build_offers(bundle, cfg)
                 baseline = build_baseline_lab(bundle)
                 aulas_calc = bundle.aulas.copy()
                 aulas_calc["es_laboratorio"] = aulas_calc["cod_tipo"].astype(str).str.startswith("L")
+                
                 domains = build_offer_domains(offers, aulas_calc, bundle.docentes, cfg, baseline)
                 
                 initial_pop = build_initial_population(offers, domains, cfg.n_slots_per_day, cfg.population_size)
@@ -367,6 +384,7 @@ def main():
                 n_cycles = 10
                 n_rooms = int(bundle.aulas["room_id"].max()) + 1
                 n_teachers = int(bundle.docentes["teacher_id"].max()) + 1
+                
                 for ind in initial_pop:
                     evaluate(ind, offers, n_cycles, n_rooms, n_teachers, cfg)
                 sigma_scale(initial_pop, cfg)
@@ -382,12 +400,10 @@ def main():
                 st.session_state.history.append((0, int(best.penalty)))
                 st.session_state.has_run = True
                 
-                status.update(label="¡Inicializado! Ve a 'Procesos Adicionales'.", state="complete", expanded=False)
-
+                status.update(label="Poblacion Generada!", state="complete", expanded=False)
         if st.session_state.get("has_run", False) and st.session_state.initial_pop_list:
             st.divider()
             st.subheader("Muestra de Población Inicial (Aleatoria)")
-            st.caption("A continuación se muestran los cromosomas generados en la población inicial.")
             sample_ind = st.session_state.initial_pop_list[0]
             offers = st.session_state.offers
             pop_data = []
@@ -396,40 +412,32 @@ def main():
                 bits_dias = day_to_bitmask(g.days)
                 bits_a1 = to_binary_string(g.room1, 4)
                 bits_h1 = to_binary_string(g.start1, 5)
-                if len(g.days) > 1 and g.room2 is not None:
-                    bits_a2 = to_binary_string(g.room2, 4)
-                    bits_h2 = to_binary_string(g.start2, 5)
-                else:
-                    bits_a2 = "0000"
-                    bits_h2 = "00000"
+                bits_a2 = to_binary_string(g.room2, 4) if (len(g.days)>1 and g.room2 is not None) else "0000"
+                bits_h2 = to_binary_string(g.start2, 5) if (len(g.days)>1 and g.room2 is not None) else "00000"
                 pop_data.append({
-                    "Curso": off.cod_curso,
-                    "Grupo": off.grupo_horario,
-                    "Doc(6b)": bits_doc,
-                    "Días(6b)": bits_dias,
-                    "Aula1(4b)": bits_a1,
-                    "Hora1(5b)": bits_h1,
-                    "Aula2(4b)": bits_a2,
-                    "Hora2(5b)": bits_h2
+                    "Curso": off.cod_curso, "Grupo": off.grupo_horario,
+                    "Doc(6b)": bits_doc, "Días(6b)": bits_dias,
+                    "Aula1(4b)": bits_a1, "Hora1(5b)": bits_h1,
+                    "Aula2(4b)": bits_a2, "Hora2(5b)": bits_h2
                 })
-            st.dataframe(pd.DataFrame(pop_data), height=400, use_container_width=True)
+            st.dataframe(pd.DataFrame(pop_data), height=300, use_container_width=True)
 
     # 2. PROCESOS ADICIONALES
     elif page == "Procesos Adicionales":
         st.header("⚙️ Procesos Adicionales")
         
         if not st.session_state.get("has_run", False):
-            st.warning("Debe inicializar los datos en la pestaña 'Realizar Asignación' primero.")
+            st.warning("⚠️ Primero ejecute 'CREAR POBLACIÓN INICIAL' en la pestaña 'Realizar Asignación'.")
         else:
             solver = st.session_state.solver
             offers = st.session_state.offers
-            cfg = st.session_state.cfg
+            cfg = APP_CONFIG
 
-            col_controls, col_metrics = st.columns([2, 1])
-            with col_controls:
-                c1, c2, c3 = st.columns(3)
-                if c1.button("Altera Poblac. Inicial"):
-                    with st.spinner("Reiniciando población..."):
+            c_ctrl, c_metrics = st.columns([2, 1])
+            with c_ctrl:
+                c1, c2 = st.columns(2)
+                if c1.button(" Altera Poblac. Inicial (Reset)"):
+                    with st.spinner("Reiniciando poblacion (Aleatoria)..."):
                         pop_size = cfg.population_size
                         new_pop = build_initial_population(offers, solver.domains, cfg.n_slots_per_day, pop_size)
                         new_pop = [repair_individual(ind, offers, solver.domains, cfg) for ind in new_pop]
@@ -445,7 +453,7 @@ def main():
                         st.session_state.history.append((0, int(best.penalty)))
                         st.rerun()
 
-                if c2.button("Calcula Penalidad"):
+                if c2.button(" Calcular Penalidad Actual"):
                     for ind in st.session_state.population:
                         evaluate(ind, offers, solver.n_cycles, solver.n_rooms, solver.n_teachers, cfg)
                     sigma_scale(st.session_state.population, cfg)
@@ -454,39 +462,43 @@ def main():
                     st.session_state.history.append((st.session_state.get("generation_count", 0), int(best.penalty)))
                     st.rerun()
 
-                c4, c5, c6 = st.columns(3)
-                if c4.button("Gen. UNA Población"):
+                c3, c4 = st.columns(2)
+                if c3.button(" Gen. 1 Poblacion"):
                     current_pop = st.session_state.population
-                    next_gen = run_single_generation(solver, current_pop, 0.1, offers, cfg)
+                    next_gen = run_smart_generation(solver, current_pop, 0.2, offers, cfg)
                     st.session_state.population = next_gen
                     st.session_state.generation_count += 1
                     best = max(next_gen, key=lambda x: x.fitness)
                     st.session_state.best_ind = best
                     st.session_state.history.append((st.session_state.generation_count, int(best.penalty)))
                     st.rerun()
-            
-                if c5.button("Gen. Poblaciones (5)"):
+
+                if c4.button(" Gen. 50 Poblaciones"):
                     current_pop = st.session_state.population
-                    for _ in range(5):
-                        current_pop = run_single_generation(solver, current_pop, 0.1, offers, cfg)
+                    progress_bar = st.progress(0)
+                    status_text = st.empty()
+                    for i in range(50):
+                        current_pop = run_smart_generation(solver, current_pop, 0.2, offers, cfg)
                         st.session_state.generation_count += 1
                         best = max(current_pop, key=lambda x: x.fitness)
-                        st.session_state.history.append((st.session_state.generation_count, int(best.penalty)))
+                        progress_bar.progress((i + 1) / 50)
+                        status_text.text(f"Generando {i+1}/50... Penalidad: {int(best.penalty)}")
                     st.session_state.population = current_pop
                     st.session_state.best_ind = best
+                    st.session_state.history.append((st.session_state.generation_count, int(best.penalty)))
+                    status_text.empty()
+                    progress_bar.empty()
                     st.rerun()
-
-                if c6.button("Salir"):
-                    st.session_state.clear()
-                    st.rerun()
-            
-            with col_metrics:
+            with c_metrics:
                 gen_num = st.session_state.get('generation_count', 0)
                 best_pen = int(st.session_state.best_ind.penalty) if st.session_state.best_ind else 0
                 st.markdown(f"""
-                <div style='display:flex; gap:10px; margin-top:5px;'>
-                    <div><small>Población (Gen)</small><div class='read-only-input'>{gen_num:03d}</div></div>
-                    <div><small>T.Penalidad</small><div class='read-only-input' style='color:#ff4b4b'>{best_pen}</div></div>
+                <div class="metric-box">
+                    <div class="metric-label">POBLACIÓN ACTUAL</div>
+                    <div class="metric-value">{gen_num}</div>
+                    <hr style="margin: 10px 0; border-color: #eee;">
+                    <div class="metric-label">PENALIDAD TOTAL</div>
+                    <div class="metric-value metric-highlight">{best_pen}</div>
                 </div>
                 """, unsafe_allow_html=True)
 
@@ -494,8 +506,9 @@ def main():
             best = st.session_state.best_ind
             gene_stats, total_fit_sum, pen_doc, pen_ciclo, pen_aula = calculate_dynamic_details(best, offers, bundle)
 
-            st.markdown("##### Cursos Docentes (Detalle Cromosoma)")
-            html_main = """<table class="dark-table"><thead><tr>
+            # 1. DETALLE POR CURSO
+            st.subheader("1. Detalle por curso")
+            html_main = """<table class="styled-table"><thead><tr>
             <th>Curso</th><th>Grupo</th><th>Docente</th><th>Cromosoma (Docente | Días | Aula | Hora)</th><th>Penal</th><th>Aptitud</th><th>P.Selec</th><th>P.Acumul</th>
             </tr></thead><tbody>"""
             p_acum = 0.0
@@ -506,139 +519,130 @@ def main():
                 doc_code = get_docente_code(bundle, g.teacher_id)
                 bits_doc = to_binary_string(g.teacher_id, 6)
                 bits_dias = day_to_bitmask(g.days)
-                bits_bloque1 = f"{to_binary_string(g.room1, 4)}{to_binary_string(g.start1, 5)}"
-                bits_bloque2 = f" {to_binary_string(g.room2, 4)}{to_binary_string(g.start2, 5)}" if (len(g.days) > 1 and g.room2 is not None) else " 000000000"
-                full_bits = f"{bits_doc} {bits_dias} {bits_bloque1}{bits_bloque2}"
+                bits_b1 = f"{to_binary_string(g.room1, 4)}{to_binary_string(g.start1, 5)}"
+                bits_b2 = f" {to_binary_string(g.room2, 4)}{to_binary_string(g.start2, 5)}" if (len(g.days)>1 and g.room2 is not None) else " 000000000"
+                full_bits = f"{bits_doc} {bits_dias} {bits_b1}{bits_b2}"
                 p_selec = stat['aptitud'] / total_fit_sum if total_fit_sum > 0 else 0.0
                 p_acum += p_selec
                 html_main += f"""<tr><td>{off.cod_curso}</td><td>{off.grupo_horario}</td><td>{doc_code}</td><td style='font-family:monospace'>{full_bits}</td><td>{int(stat['penal'])}</td><td>{stat['aptitud']:.5f}</td><td>{p_selec:.5f}</td><td>{p_acum:.5f}</td></tr>"""
             html_main += "</tbody></table>"
-            st.markdown(f"<div class='scroll-container'>{html_main}</div>", unsafe_allow_html=True)
+            st.markdown(f"<div class='scroll-table-container'>{html_main}</div>", unsafe_allow_html=True)
 
-            st.markdown("##### Subpoblaciones (Turnos)")
-            def render_unified_turn_table(turno_key, title):
-                if turno_key not in solver.subpopulations: return ""
-                html_sub = f"""<div style="margin-bottom:5px; font-weight:bold; color:#ddd;">{title}</div>
-                <table class="dark-table"><thead><tr><th>Carga</th><th>Curso</th><th>Grupo</th><th>Docente</th><th>Cromosoma (Bits)</th><th>P.Sel</th></tr></thead><tbody>"""
-                has_data = False
+            # 2. SUBPOBLACIONES
+            st.subheader("2. Subpoblaciones")
+            
+            def render_subpop_table(turno_key, title):
+                # Si no hay datos, retornar placeholder vacío
+                if turno_key not in solver.subpopulations:
+                    return ""
+                
+                # HTML para la tabla del bloque específico
+                html = f"""
+                <div class="subpop-header">{title}</div>
+                <div class="scroll-table-container" style="height:200px;">
+                <table class="styled-table" style="margin-top:0;">
+                <thead><tr><th>Carga</th><th>Curso</th><th>Grupo</th><th>Docente</th><th>Cromosoma (Bits)</th><th>P.Sel</th></tr></thead>
+                <tbody>
+                """
+                
+                has_rows = False
                 for horas, idxs in solver.subpopulations[turno_key].items():
                     for idx in idxs:
-                        has_data = True
+                        has_rows = True
                         stat = next((s for s in gene_stats if s['idx'] == idx), None)
                         if not stat: continue
                         g = best.genes[idx]
                         off = offers[idx]
                         doc_code = get_docente_code(bundle, g.teacher_id)
-                        bits_doc = to_binary_string(g.teacher_id, 6)
-                        bits_dias = day_to_bitmask(g.days)
-                        bits = f"{bits_doc} {bits_dias}..."
+                        bits = f"{to_binary_string(g.teacher_id, 6)} {day_to_bitmask(g.days)}..."
                         p_sel = stat['aptitud'] / total_fit_sum if total_fit_sum > 0 else 0.0
-                        html_sub += f"""<tr><td>{horas} Hrs</td><td>{off.cod_curso}</td><td>{off.grupo_horario}</td><td>{doc_code}</td><td style='font-family:monospace'>{bits}</td><td>{p_sel:.5f}</td></tr>"""
-                html_sub += "</tbody></table>"
-                return html_sub if has_data else ""
+                        
+                        html += f"""<tr>
+                        <td>{horas} Hrs</td><td>{off.cod_curso}</td><td>{off.grupo_horario}</td>
+                        <td>{doc_code}</td><td style='font-family:monospace'>{bits}</td><td>{p_sel:.5f}</td>
+                        </tr>"""
+                
+                html += "</tbody></table></div>"
+                return html if has_rows else f"<div class='subpop-header'>{title} (Sin datos)</div>"
 
-            full_subpop = ""
-            full_subpop += render_unified_turn_table("M", "► Turno Mañana") + "<br>"
-            full_subpop += render_unified_turn_table("T", "► Turno Tarde") + "<br>"
-            full_subpop += render_unified_turn_table("N", "► Turno Noche")
-            st.markdown(f"<div class='scroll-container' style='max_height:300px;'>{full_subpop}</div>", unsafe_allow_html=True)
+            # Renderizar los 3 bloques
+            st.markdown(render_subpop_table("M", "Turno Mañana"), unsafe_allow_html=True)
+            st.markdown(render_subpop_table("T", "Turno Tarde"), unsafe_allow_html=True)
+            st.markdown(render_subpop_table("N", "Turno Noche"), unsafe_allow_html=True)
 
-            st.markdown("##### Reporte de Penalidades")
+            # 3. REPORTE DE PENALIDADES
+            st.subheader("3. Reporte de Penalidades")
             c1, c2, c3 = st.columns(3)
             def make_list_html(items, empty_msg):
-                if not items: return f"<div class='dark-info-box' style='color:#88dd88;'>{empty_msg}</div>"
-                html = "<div class='dark-info-box'>"
-                for item in items: html += f"{item}<br>"
-                html += "</div>"
-                return html
+                content = ""
+                if not items: content = f"<span style='color:green; font-weight:bold;'>{empty_msg}</span>"
+                else: 
+                    for item in items: content += f"{item}<br>"
+                return f"<div class='penalty-list'>{content}</div>"
+
             with c1:
                 st.markdown("**Penalidad Docente**")
-                st.markdown(make_list_html(pen_doc, "OK"), unsafe_allow_html=True)
+                st.markdown(make_list_html(pen_doc, "✔ 0 Conflictos"), unsafe_allow_html=True)
             with c2:
                 st.markdown("**Penalidad Docente Ciclo**")
-                st.markdown(make_list_html(pen_ciclo, "OK"), unsafe_allow_html=True)
+                st.markdown(make_list_html(pen_ciclo, "✔ 0 Conflictos"), unsafe_allow_html=True)
             with c3:
                 st.markdown("**Penalidad Docente Aula**")
-                st.markdown(make_list_html(pen_aula, "OK"), unsafe_allow_html=True)
+                st.markdown(make_list_html(pen_aula, "✔ 0 Conflictos"), unsafe_allow_html=True)
 
-    # 3. MATRICES DE CONFLICTOS (NUEVA PESTAÑA)
+    # 3. MATRICES DE CONFLICTOS
     elif page == "Matrices de Conflictos":
         st.header("⚠️ Matrices de Conflictos")
         
         if not st.session_state.get("has_run", False):
-            st.warning("Debe inicializar los datos en la pestaña 'Realizar Asignación' primero.")
+            st.warning("Debe inicializar los datos primero.")
         else:
             best = st.session_state.best_ind
             offers = st.session_state.offers
-            # Obtenemos las matrices crudas
             m_cycle, m_room, m_teach = get_conflict_matrices(best, offers, bundle)
             
-            # Selector de Tipo
-            tipo_matriz = st.radio("Seleccione el Tipo de Matriz:", 
-                                   ["Por Ciclo (Cruce de Horarios)", "Por Aula (Ocupación)", "Por Docente (Disponibilidad)"], 
+            tipo_matriz = st.radio("Tipo de Matriz:", 
+                                   ["Por Ciclo (Cruce Horario)", "Por Aula (Ocupación)", "Por Docente (Disponibilidad)"], 
                                    horizontal=True)
             st.write("---")
 
             def style_conflict_matrix(df):
-                """Aplica colores: 0=Vacío, 1=Verde (OK), >1=Rojo (Conflicto)"""
                 def highlight_cells(val):
                     try:
                         v = int(val)
-                        if v == 0: return 'color: #333;' # Ocultar ceros (vacío)
-                        if v == 1: return 'background-color: #90ee90; color: black; font-weight: bold;' # Verde
-                        if v > 1: return 'background-color: #ff4b4b; color: white; font-weight: bold;' # Rojo
+                        if v == 0: return 'color: #ccc;' 
+                        if v == 1: return 'background-color: #c8e6c9; color: #1b5e20; font-weight: bold;' 
+                        if v > 1: return 'background-color: #ffcdd2; color: #b71c1c; font-weight: bold;'
                     except: pass
                     return ''
                 return df.style.applymap(highlight_cells)
 
-            cfg_local = st.session_state.get("cfg", GAConfig())
-            # Preparar índices y columnas para visualización
-            idx_horas = [horas_map.get(i, str(i)) for i in range(cfg_local.n_slots_per_day)]
-            cols_dias = [dias_map.get(i, str(i)) for i in range(cfg_local.n_days)]
+            idx_horas = [horas_map.get(i, str(i)) for i in range(17)]
+            cols_dias = [dias_map.get(i, str(i)) for i in range(6)]
 
             if "Ciclo" in tipo_matriz:
-                # Selector de ciclo
                 ciclos_disponibles = sorted(list(set(o.ciclo for o in offers)))
                 sel_ciclo = st.selectbox("Seleccione Ciclo:", ciclos_disponibles)
-                
-                # Obtener la matriz específica (cycle_idx = ciclo - 1)
-                # m_cycle shape: (cycles, days, slots) -> Transponemos a (slots, days)
                 mat_data = m_cycle[sel_ciclo - 1].T 
                 df_viz = pd.DataFrame(mat_data, index=idx_horas, columns=cols_dias)
-                
-                st.subheader(f"Matriz de Conflictos: Ciclo {sel_ciclo}")
-                st.dataframe(style_conflict_matrix(df_viz), height=600)
+                st.dataframe(style_conflict_matrix(df_viz), height=600, use_container_width=True)
 
             elif "Aula" in tipo_matriz:
-                # Selector de Aula (Ordenado alfabéticamente)
                 aulas_sorted = bundle.aulas.sort_values("cod_aula")
                 aula_ids = aulas_sorted["room_id"].tolist()
                 aula_dict = dict(zip(aulas_sorted["room_id"], aulas_sorted["cod_aula"]))
-                
                 sel_aula_id = st.selectbox("Seleccione Aula:", options=aula_ids, format_func=lambda x: aula_dict[x])
-                
                 mat_data = m_room[sel_aula_id].T
                 df_viz = pd.DataFrame(mat_data, index=idx_horas, columns=cols_dias)
-                
-                st.subheader(f"Matriz de Conflictos: {aula_dict[sel_aula_id]}")
-                st.dataframe(style_conflict_matrix(df_viz), height=600)
+                st.dataframe(style_conflict_matrix(df_viz), height=600, use_container_width=True)
 
             elif "Docente" in tipo_matriz:
-                # Selector de Docente
                 docentes_sorted = bundle.docentes.sort_values("ap_paterno")
-                # Filtramos solo docentes que están en el bundle
                 doc_ids = sorted(docentes_sorted["teacher_id"].unique())
-                
-                def get_doc_label(tid):
-                    return get_docente_name(bundle, tid)
-                
-                sel_doc_id = st.selectbox("Seleccione Docente:", options=doc_ids, format_func=get_doc_label)
-                
+                sel_doc_id = st.selectbox("Seleccione Docente:", options=doc_ids, format_func=lambda x: get_docente_name(bundle, x))
                 mat_data = m_teach[sel_doc_id].T
                 df_viz = pd.DataFrame(mat_data, index=idx_horas, columns=cols_dias)
-                
-                st.subheader(f"Matriz de Conflictos: {get_docente_name(bundle, sel_doc_id)}")
-                st.dataframe(style_conflict_matrix(df_viz), height=600)
+                st.dataframe(style_conflict_matrix(df_viz), height=600, use_container_width=True)
 
     # 4. HORARIO POR CICLO
     elif page == "Horario por Ciclo":
