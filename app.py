@@ -6,11 +6,12 @@ import os
 import copy
 import random
 from src.data_loader import load_data
-from src.config import GAConfig, TURN_SLOTS
+from src.config import GAConfig, load_config
 from src.domains import build_offer_domains
 from src.initial_population import build_initial_population
 from src.ga import GeneticSolver
 from src.evaluation import evaluate
+from src.operators import repair_individual, sigma_scale, interleaved_crossover, mutate_swap
 from run import build_offers, build_baseline_lab, to_binary_string, day_to_bitmask
 
 # --- CONFIGURACIÓN DE PÁGINA ---
@@ -143,8 +144,9 @@ def get_html_card(nombre, grupo, docente, aula, tipo):
     )
 
 def create_schedule_matrix(best_ind, offers, bundle, filter_mode, filter_val, dias_map, horas_map):
-    TOTAL_SLOTS = 17 
-    matrix = np.full((TOTAL_SLOTS, 6), "", dtype=object)
+    cfg = st.session_state.get("cfg", GAConfig())
+    TOTAL_SLOTS = cfg.n_slots_per_day
+    matrix = np.full((TOTAL_SLOTS, cfg.n_days), "", dtype=object)
     
     for g, off in zip(best_ind.genes, offers):
         show = False
@@ -158,7 +160,7 @@ def create_schedule_matrix(best_ind, offers, bundle, filter_mode, filter_val, di
         
         if filter_mode == "Ciclo" or g.room1 == filter_val:
             for d in [g.days[0]]:
-                if 0 <= d < 6:
+                if 0 <= d < cfg.n_days:
                     for h in range(g.start1, g.start1 + g.len1):
                         if 0 <= h < TOTAL_SLOTS:
                             matrix[h, d] += get_html_card(off.nombre, off.grupo_horario, doc_code, room1_code, off.tipo_hora)
@@ -167,12 +169,12 @@ def create_schedule_matrix(best_ind, offers, bundle, filter_mode, filter_val, di
             if filter_mode == "Ciclo" or g.room2 == filter_val:
                 room2_code = get_room_code(bundle, g.room2)
                 for d in [g.days[1]]:
-                    if 0 <= d < 6:
+                    if 0 <= d < cfg.n_days:
                         for h in range(g.start2, g.start2 + g.len2):
                             if 0 <= h < TOTAL_SLOTS:
                                 matrix[h, d] += get_html_card(off.nombre, off.grupo_horario, doc_code, room2_code, off.tipo_hora)
     
-    cols = [dias_map.get(i, f"Dia {i}") for i in range(6)]
+    cols = [dias_map.get(i, f"Dia {i}") for i in range(cfg.n_days)]
     df_mat = pd.DataFrame(matrix, columns=cols)
     df_mat.index = [horas_map.get(i, f"Slot {i}") for i in range(TOTAL_SLOTS)]
     return df_mat
@@ -180,28 +182,29 @@ def create_schedule_matrix(best_ind, offers, bundle, filter_mode, filter_val, di
 # --- HELPER: MATRICES DE CONFLICTO (NUEVO) ---
 def get_conflict_matrices(individual, offers, bundle):
     """Retorna las 3 matrices numéricas de ocupación: [Ciclo, Aula, Docente]"""
+    cfg = st.session_state.get("cfg", GAConfig())
     n_cycles = 10
     n_rooms = int(bundle.aulas["room_id"].max()) + 1
     n_teachers = int(bundle.docentes["teacher_id"].max()) + 1
-    TOTAL_SLOTS = 17
+    TOTAL_SLOTS = cfg.n_slots_per_day
 
     # Matrices de conteo (0=Libre, 1=Ocupado, >1=Conflicto)
-    count_cycle = np.zeros((n_cycles + 1, 6, TOTAL_SLOTS), dtype=int)
-    count_room = np.zeros((n_rooms + 1, 6, TOTAL_SLOTS), dtype=int)
-    count_teach = np.zeros((n_teachers + 1, 6, TOTAL_SLOTS), dtype=int)
+    count_cycle = np.zeros((n_cycles + 1, cfg.n_days, TOTAL_SLOTS), dtype=int)
+    count_room = np.zeros((n_rooms + 1, cfg.n_days, TOTAL_SLOTS), dtype=int)
+    count_teach = np.zeros((n_teachers + 1, cfg.n_days, TOTAL_SLOTS), dtype=int)
 
     for i, (g, off) in enumerate(zip(individual.genes, offers)):
         cyc = int(off.ciclo) - 1
         # Bloque 1
         for h in range(g.start1, g.start1 + g.len1):
-            if h < TOTAL_SLOTS and g.days[0] < 6:
+            if h < TOTAL_SLOTS and g.days[0] < cfg.n_days:
                 count_cycle[cyc, g.days[0], h] += 1
                 count_room[g.room1, g.days[0], h] += 1
                 count_teach[g.teacher_id, g.days[0], h] += 1
         # Bloque 2
         if len(g.days) > 1 and g.room2 is not None:
             for h in range(g.start2, g.start2 + g.len2):
-                if h < TOTAL_SLOTS and g.days[1] < 6:
+                if h < TOTAL_SLOTS and g.days[1] < cfg.n_days:
                     count_cycle[cyc, g.days[1], h] += 1
                     count_room[g.room2, g.days[1], h] += 1
                     count_teach[g.teacher_id, g.days[1], h] += 1
@@ -213,8 +216,8 @@ def calculate_dynamic_details(individual, offers, bundle):
     # Reutilizamos la lógica de matrices para calcular penalidades
     count_cycle, count_room, count_teach = get_conflict_matrices(individual, offers, bundle)
     
-    cfg = GAConfig()
-    TOTAL_SLOTS = 17
+    cfg = st.session_state.get("cfg", GAConfig())
+    TOTAL_SLOTS = cfg.n_slots_per_day
     gene_stats = []
     penalties_docente = []
     penalties_doc_ciclo = []
@@ -231,7 +234,7 @@ def calculate_dynamic_details(individual, offers, bundle):
         
         # Bloque 1
         for h in range(g.start1, g.start1 + g.len1):
-            if h < TOTAL_SLOTS and g.days[0] < 6:
+            if h < TOTAL_SLOTS and g.days[0] < cfg.n_days:
                 if count_cycle[cyc, g.days[0], h] > 1: pen_cycle += cfg.W_CONFLICT_CYCLE
                 if count_room[g.room1, g.days[0], h] > 1: pen_room += cfg.W_CONFLICT_ROOM
                 if count_teach[g.teacher_id, g.days[0], h] > 1: pen_teacher += cfg.W_CONFLICT_TEACHER
@@ -239,7 +242,7 @@ def calculate_dynamic_details(individual, offers, bundle):
         # Bloque 2
         if len(g.days) > 1 and g.room2 is not None:
             for h in range(g.start2, g.start2 + g.len2):
-                if h < TOTAL_SLOTS and g.days[1] < 6:
+                if h < TOTAL_SLOTS and g.days[1] < cfg.n_days:
                     if count_cycle[cyc, g.days[1], h] > 1: pen_cycle += cfg.W_CONFLICT_CYCLE
                     if count_room[g.room2, g.days[1], h] > 1: pen_room += cfg.W_CONFLICT_ROOM
                     if count_teach[g.teacher_id, g.days[1], h] > 1: pen_teacher += cfg.W_CONFLICT_TEACHER
@@ -259,20 +262,27 @@ def calculate_dynamic_details(individual, offers, bundle):
 
 # --- LOGICA DE EVOLUCIÓN UN PASO ---
 def run_single_generation(solver, population, mutation_rate, offers, cfg):
+    sigma_scale(population, cfg)
     best_global = max(population, key=lambda x: x.fitness)
     population.sort(key=lambda x: x.fitness, reverse=True)
     new_pop = [copy.deepcopy(best_global)]
     while len(new_pop) < len(population):
         p1 = solver.selection_roulette(population)
         p2 = solver.selection_roulette(population)
-        child = solver.crossover_subpopulations(p1, p2)
-        solver.mutate(child, mutation_rate)
+        child = interleaved_crossover(p1, p2)
+        repair_individual(child, offers, solver.domains, cfg)
+        mutate_swap(child, mutation_rate)
         evaluate(child, offers, solver.n_cycles, solver.n_rooms, solver.n_teachers, cfg)
         new_pop.append(child)
+    sigma_scale(new_pop, cfg)
     return new_pop
 
 # --- MAIN APP ---
 def main():
+    if "cfg" not in st.session_state:
+        st.session_state.cfg = load_config("config.yaml")
+    cfg = st.session_state.cfg
+
     if 'bundle' not in st.session_state:
         st.session_state.bundle = load_data("data")
     bundle = st.session_state.bundle
@@ -345,20 +355,21 @@ def main():
             st.session_state.history = []
             
             with st.status("Iniciando...", expanded=True) as status:
-                offers = build_offers(bundle)
+                offers = build_offers(bundle, cfg)
                 baseline = build_baseline_lab(bundle)
                 aulas_calc = bundle.aulas.copy()
                 aulas_calc["es_laboratorio"] = aulas_calc["cod_tipo"].astype(str).str.startswith("L")
-                domains = build_offer_domains(offers, aulas_calc, bundle.docentes, TURN_SLOTS, 6, baseline)
+                domains = build_offer_domains(offers, aulas_calc, bundle.docentes, cfg, baseline)
                 
-                initial_pop = build_initial_population(offers, domains, 15, 102)
+                initial_pop = build_initial_population(offers, domains, cfg.n_slots_per_day, cfg.population_size)
+                initial_pop = [repair_individual(ind, offers, domains, cfg) for ind in initial_pop]
                 
                 n_cycles = 10
                 n_rooms = int(bundle.aulas["room_id"].max()) + 1
                 n_teachers = int(bundle.docentes["teacher_id"].max()) + 1
-                cfg = GAConfig()
                 for ind in initial_pop:
                     evaluate(ind, offers, n_cycles, n_rooms, n_teachers, cfg)
+                sigma_scale(initial_pop, cfg)
                 
                 st.session_state.initial_pop_list = initial_pop
                 st.session_state.population = initial_pop
@@ -412,17 +423,19 @@ def main():
         else:
             solver = st.session_state.solver
             offers = st.session_state.offers
-            cfg = GAConfig()
+            cfg = st.session_state.cfg
 
             col_controls, col_metrics = st.columns([2, 1])
             with col_controls:
                 c1, c2, c3 = st.columns(3)
                 if c1.button("Altera Poblac. Inicial"):
                     with st.spinner("Reiniciando población..."):
-                        pop_size = 102
-                        new_pop = build_initial_population(offers, solver.domains, 15, pop_size)
+                        pop_size = cfg.population_size
+                        new_pop = build_initial_population(offers, solver.domains, cfg.n_slots_per_day, pop_size)
+                        new_pop = [repair_individual(ind, offers, solver.domains, cfg) for ind in new_pop]
                         for ind in new_pop:
                             evaluate(ind, offers, solver.n_cycles, solver.n_rooms, solver.n_teachers, cfg)
+                        sigma_scale(new_pop, cfg)
                         st.session_state.initial_pop_list = new_pop
                         st.session_state.population = new_pop
                         st.session_state.generation_count = 0
@@ -435,8 +448,10 @@ def main():
                 if c2.button("Calcula Penalidad"):
                     for ind in st.session_state.population:
                         evaluate(ind, offers, solver.n_cycles, solver.n_rooms, solver.n_teachers, cfg)
+                    sigma_scale(st.session_state.population, cfg)
                     best = max(st.session_state.population, key=lambda x: x.fitness)
                     st.session_state.best_ind = best
+                    st.session_state.history.append((st.session_state.get("generation_count", 0), int(best.penalty)))
                     st.rerun()
 
                 c4, c5, c6 = st.columns(3)
@@ -576,9 +591,10 @@ def main():
                     return ''
                 return df.style.applymap(highlight_cells)
 
+            cfg_local = st.session_state.get("cfg", GAConfig())
             # Preparar índices y columnas para visualización
-            idx_horas = [horas_map.get(i, str(i)) for i in range(17)]
-            cols_dias = [dias_map.get(i, str(i)) for i in range(6)]
+            idx_horas = [horas_map.get(i, str(i)) for i in range(cfg_local.n_slots_per_day)]
+            cols_dias = [dias_map.get(i, str(i)) for i in range(cfg_local.n_days)]
 
             if "Ciclo" in tipo_matriz:
                 # Selector de ciclo

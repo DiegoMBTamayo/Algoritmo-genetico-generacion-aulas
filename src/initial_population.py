@@ -6,8 +6,11 @@ from .model import CourseOffering, Gene, Individual
 from .domains import OfferDomain, split_weekly_hours
 
 def _choose_two_distinct_days(day_pool: List[int]) -> tuple[int, int]:
+    if len(day_pool) == 1:
+        return day_pool[0], day_pool[0]
     d1 = random.choice(day_pool)
-    d2 = random.choice([d for d in day_pool if d != d1])
+    remaining = [d for d in day_pool if d != d1] or [d1]
+    d2 = random.choice(remaining)
     return d1, d2
 
 def _valid_start_slots(allowed_starts: List[int], session_len: int, max_slot: int) -> List[int]:
@@ -44,7 +47,9 @@ def random_gene_for_offer(
     # si solo una sesión
     if h2 == 0:
         day = random.choice(dom.allowed_day_idxs)
-        starts = _valid_start_slots(dom.allowed_start_slots, h1, max_slot)
+        starts = _valid_start_slots(dom.allowed_start_slots or list(range(max_slot + 1)), h1, max_slot)
+        if not starts:
+            starts = [0]
         start = random.choice(starts)
         room = random.choice(dom.room_ids)
         return Gene(
@@ -58,8 +63,12 @@ def random_gene_for_offer(
     # dos sesiones (día1/día2)
     d1, d2 = _choose_two_distinct_days(dom.allowed_day_idxs)
 
-    starts1 = _valid_start_slots(dom.allowed_start_slots, h1, max_slot)
-    starts2 = _valid_start_slots(dom.allowed_start_slots, h2, max_slot)
+    starts1 = _valid_start_slots(dom.allowed_start_slots or list(range(max_slot + 1)), h1, max_slot)
+    if not starts1:
+        starts1 = [0]
+    starts2 = _valid_start_slots(dom.allowed_start_slots or list(range(max_slot + 1)), h2, max_slot)
+    if not starts2:
+        starts2 = [0]
 
     start1 = random.choice(starts1)
     start2 = random.choice(starts2)

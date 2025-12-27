@@ -34,3 +34,4 @@ class Individual:
     genes: List[Gene]
     penalty: float = 0.0
     fitness: float = 0.0
+    scaled_fitness: float = 0.0

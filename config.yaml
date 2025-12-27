@@ -1,0 +1,37 @@
+seed: 7
+population_size: 102
+generations: 40
+mutation_rate: 0.15
+elite_size: 1
+max_stagnation: 20
+
+n_days: 6
+n_slots_per_day: 17
+
+weight_conflict_cycle: 5
+weight_conflict_room: 4
+weight_conflict_teacher: 2
+
+turn_slots:
+  M: [0, 1, 2, 3, 4, 5]
+  T: [6, 7, 8, 9, 10, 11]
+  N: [11, 12, 13, 14, 15, 16]
+
+cycle_turn_map:
+  - [[1, 3], "M"]
+  - [[4, 7], "T"]
+  - [[8, 10], "N"]
+
+weekly_hours_by_type:
+  T: 3
+  P: 2
+  L: 2
+
+teacher_hour_limits:
+  default:
+    min: 0
+    max: 16
+
+course_teacher_pref: {}
+fixed_course_room: []
+fixed_teacher_course: []
