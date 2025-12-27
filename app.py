@@ -177,38 +177,51 @@ def create_schedule_matrix(best_ind, offers, bundle, filter_mode, filter_val, di
     df_mat.index = [horas_map.get(i, f"Slot {i}") for i in range(TOTAL_SLOTS)]
     return df_mat
 
-# --- HELPER: CÁLCULO DINÁMICO ---
-def calculate_dynamic_details(individual, offers, bundle):
-    cfg = GAConfig()
+# --- HELPER: MATRICES DE CONFLICTO (NUEVO) ---
+def get_conflict_matrices(individual, offers, bundle):
+    """Retorna las 3 matrices numéricas de ocupación: [Ciclo, Aula, Docente]"""
     n_cycles = 10
     n_rooms = int(bundle.aulas["room_id"].max()) + 1
     n_teachers = int(bundle.docentes["teacher_id"].max()) + 1
-
     TOTAL_SLOTS = 17
+
+    # Matrices de conteo (0=Libre, 1=Ocupado, >1=Conflicto)
     count_cycle = np.zeros((n_cycles + 1, 6, TOTAL_SLOTS), dtype=int)
     count_room = np.zeros((n_rooms + 1, 6, TOTAL_SLOTS), dtype=int)
     count_teach = np.zeros((n_teachers + 1, 6, TOTAL_SLOTS), dtype=int)
 
     for i, (g, off) in enumerate(zip(individual.genes, offers)):
         cyc = int(off.ciclo) - 1
+        # Bloque 1
         for h in range(g.start1, g.start1 + g.len1):
             if h < TOTAL_SLOTS and g.days[0] < 6:
                 count_cycle[cyc, g.days[0], h] += 1
                 count_room[g.room1, g.days[0], h] += 1
                 count_teach[g.teacher_id, g.days[0], h] += 1
+        # Bloque 2
         if len(g.days) > 1 and g.room2 is not None:
             for h in range(g.start2, g.start2 + g.len2):
                 if h < TOTAL_SLOTS and g.days[1] < 6:
                     count_cycle[cyc, g.days[1], h] += 1
                     count_room[g.room2, g.days[1], h] += 1
                     count_teach[g.teacher_id, g.days[1], h] += 1
+    
+    return count_cycle, count_room, count_teach
 
+# --- HELPER: CÁLCULO DINÁMICO DE PENALIDADES ---
+def calculate_dynamic_details(individual, offers, bundle):
+    # Reutilizamos la lógica de matrices para calcular penalidades
+    count_cycle, count_room, count_teach = get_conflict_matrices(individual, offers, bundle)
+    
+    cfg = GAConfig()
+    TOTAL_SLOTS = 17
     gene_stats = []
     penalties_docente = []
     penalties_doc_ciclo = []
     penalties_doc_aula = []
     total_fitness_sum = 0
     
+    # Recorrer de nuevo para asignar culpas a cada gen
     for i, (g, off) in enumerate(zip(individual.genes, offers)):
         pen_gen = 0
         pen_teacher = 0
@@ -216,12 +229,14 @@ def calculate_dynamic_details(individual, offers, bundle):
         pen_room = 0
         cyc = int(off.ciclo) - 1
         
+        # Bloque 1
         for h in range(g.start1, g.start1 + g.len1):
             if h < TOTAL_SLOTS and g.days[0] < 6:
                 if count_cycle[cyc, g.days[0], h] > 1: pen_cycle += cfg.W_CONFLICT_CYCLE
                 if count_room[g.room1, g.days[0], h] > 1: pen_room += cfg.W_CONFLICT_ROOM
                 if count_teach[g.teacher_id, g.days[0], h] > 1: pen_teacher += cfg.W_CONFLICT_TEACHER
 
+        # Bloque 2
         if len(g.days) > 1 and g.room2 is not None:
             for h in range(g.start2, g.start2 + g.len2):
                 if h < TOTAL_SLOTS and g.days[1] < 6:
@@ -246,9 +261,7 @@ def calculate_dynamic_details(individual, offers, bundle):
 def run_single_generation(solver, population, mutation_rate, offers, cfg):
     best_global = max(population, key=lambda x: x.fitness)
     population.sort(key=lambda x: x.fitness, reverse=True)
-    
     new_pop = [copy.deepcopy(best_global)]
-    
     while len(new_pop) < len(population):
         p1 = solver.selection_roulette(population)
         p2 = solver.selection_roulette(population)
@@ -256,7 +269,6 @@ def run_single_generation(solver, population, mutation_rate, offers, cfg):
         solver.mutate(child, mutation_rate)
         evaluate(child, offers, solver.n_cycles, solver.n_rooms, solver.n_teachers, cfg)
         new_pop.append(child)
-    
     return new_pop
 
 # --- MAIN APP ---
@@ -270,12 +282,11 @@ def main():
     horas_df = bundle.horas
     horas_map = dict(zip(horas_df['slot_id'], horas_df['rango_hora']))
 
-    # --- 1. INICIALIZACIÓN DE ESTADO (SOLUCIÓN DEFINITIVA) ---
+    # INICIALIZACIÓN DE ESTADO
     if 'generation_count' not in st.session_state: st.session_state.generation_count = 0
     if 'history' not in st.session_state: st.session_state.history = []
     if 'population' not in st.session_state: st.session_state.population = None
     if 'best_ind' not in st.session_state: st.session_state.best_ind = None
-    # Esta es la clave para que no falle la Pestaña 1
     if 'initial_pop_list' not in st.session_state: st.session_state.initial_pop_list = None 
 
     # --- BARRA LATERAL ---
@@ -285,6 +296,7 @@ def main():
         page = st.radio("Ir a la sección:", [
             "Realizar Asignación", 
             "Procesos Adicionales", 
+            "Matrices de Conflictos", # NUEVA PESTAÑA
             "Horario por Ciclo", 
             "Horario por Aula", 
             "Horarios en General"
@@ -348,7 +360,7 @@ def main():
                 for ind in initial_pop:
                     evaluate(ind, offers, n_cycles, n_rooms, n_teachers, cfg)
                 
-                st.session_state.initial_pop_list = initial_pop # Guardar para vista
+                st.session_state.initial_pop_list = initial_pop
                 st.session_state.population = initial_pop
                 st.session_state.offers = offers
                 st.session_state.domains = domains
@@ -359,9 +371,8 @@ def main():
                 st.session_state.history.append((0, int(best.penalty)))
                 st.session_state.has_run = True
                 
-                status.update(label="¡Inicializado! Ve a 'Procesos Adicionales' para controlar la evolución.", state="complete", expanded=False)
+                status.update(label="¡Inicializado! Ve a 'Procesos Adicionales'.", state="complete", expanded=False)
 
-        # MUESTRA POBLACIÓN INICIAL (Corrección de error AttributeError)
         if st.session_state.get("has_run", False) and st.session_state.initial_pop_list:
             st.divider()
             st.subheader("Muestra de Población Inicial (Aleatoria)")
@@ -392,7 +403,7 @@ def main():
                 })
             st.dataframe(pd.DataFrame(pop_data), height=400, use_container_width=True)
 
-    # 2. PROCESOS ADICIONALES (CORREGIDO)
+    # 2. PROCESOS ADICIONALES
     elif page == "Procesos Adicionales":
         st.header("⚙️ Procesos Adicionales")
         
@@ -409,12 +420,10 @@ def main():
                 if c1.button("Altera Poblac. Inicial"):
                     with st.spinner("Reiniciando población..."):
                         pop_size = 102
-                        # CORRECCIÓN: Usar solver.domains
                         new_pop = build_initial_population(offers, solver.domains, 15, pop_size)
                         for ind in new_pop:
                             evaluate(ind, offers, solver.n_cycles, solver.n_rooms, solver.n_teachers, cfg)
-                        
-                        st.session_state.initial_pop_list = new_pop # Actualizar Pestaña 1
+                        st.session_state.initial_pop_list = new_pop
                         st.session_state.population = new_pop
                         st.session_state.generation_count = 0
                         st.session_state.history = []
@@ -467,8 +476,6 @@ def main():
                 """, unsafe_allow_html=True)
 
             st.write("---")
-            # GRAFICO ELIMINADO
-
             best = st.session_state.best_ind
             gene_stats, total_fit_sum, pen_doc, pen_ciclo, pen_aula = calculate_dynamic_details(best, offers, bundle)
 
@@ -539,7 +546,85 @@ def main():
                 st.markdown("**Penalidad Docente Aula**")
                 st.markdown(make_list_html(pen_aula, "OK"), unsafe_allow_html=True)
 
-    # 3. HORARIO POR CICLO
+    # 3. MATRICES DE CONFLICTOS (NUEVA PESTAÑA)
+    elif page == "Matrices de Conflictos":
+        st.header("⚠️ Matrices de Conflictos")
+        
+        if not st.session_state.get("has_run", False):
+            st.warning("Debe inicializar los datos en la pestaña 'Realizar Asignación' primero.")
+        else:
+            best = st.session_state.best_ind
+            offers = st.session_state.offers
+            # Obtenemos las matrices crudas
+            m_cycle, m_room, m_teach = get_conflict_matrices(best, offers, bundle)
+            
+            # Selector de Tipo
+            tipo_matriz = st.radio("Seleccione el Tipo de Matriz:", 
+                                   ["Por Ciclo (Cruce de Horarios)", "Por Aula (Ocupación)", "Por Docente (Disponibilidad)"], 
+                                   horizontal=True)
+            st.write("---")
+
+            def style_conflict_matrix(df):
+                """Aplica colores: 0=Vacío, 1=Verde (OK), >1=Rojo (Conflicto)"""
+                def highlight_cells(val):
+                    try:
+                        v = int(val)
+                        if v == 0: return 'color: #333;' # Ocultar ceros (vacío)
+                        if v == 1: return 'background-color: #90ee90; color: black; font-weight: bold;' # Verde
+                        if v > 1: return 'background-color: #ff4b4b; color: white; font-weight: bold;' # Rojo
+                    except: pass
+                    return ''
+                return df.style.applymap(highlight_cells)
+
+            # Preparar índices y columnas para visualización
+            idx_horas = [horas_map.get(i, str(i)) for i in range(17)]
+            cols_dias = [dias_map.get(i, str(i)) for i in range(6)]
+
+            if "Ciclo" in tipo_matriz:
+                # Selector de ciclo
+                ciclos_disponibles = sorted(list(set(o.ciclo for o in offers)))
+                sel_ciclo = st.selectbox("Seleccione Ciclo:", ciclos_disponibles)
+                
+                # Obtener la matriz específica (cycle_idx = ciclo - 1)
+                # m_cycle shape: (cycles, days, slots) -> Transponemos a (slots, days)
+                mat_data = m_cycle[sel_ciclo - 1].T 
+                df_viz = pd.DataFrame(mat_data, index=idx_horas, columns=cols_dias)
+                
+                st.subheader(f"Matriz de Conflictos: Ciclo {sel_ciclo}")
+                st.dataframe(style_conflict_matrix(df_viz), height=600)
+
+            elif "Aula" in tipo_matriz:
+                # Selector de Aula (Ordenado alfabéticamente)
+                aulas_sorted = bundle.aulas.sort_values("cod_aula")
+                aula_ids = aulas_sorted["room_id"].tolist()
+                aula_dict = dict(zip(aulas_sorted["room_id"], aulas_sorted["cod_aula"]))
+                
+                sel_aula_id = st.selectbox("Seleccione Aula:", options=aula_ids, format_func=lambda x: aula_dict[x])
+                
+                mat_data = m_room[sel_aula_id].T
+                df_viz = pd.DataFrame(mat_data, index=idx_horas, columns=cols_dias)
+                
+                st.subheader(f"Matriz de Conflictos: {aula_dict[sel_aula_id]}")
+                st.dataframe(style_conflict_matrix(df_viz), height=600)
+
+            elif "Docente" in tipo_matriz:
+                # Selector de Docente
+                docentes_sorted = bundle.docentes.sort_values("ap_paterno")
+                # Filtramos solo docentes que están en el bundle
+                doc_ids = sorted(docentes_sorted["teacher_id"].unique())
+                
+                def get_doc_label(tid):
+                    return get_docente_name(bundle, tid)
+                
+                sel_doc_id = st.selectbox("Seleccione Docente:", options=doc_ids, format_func=get_doc_label)
+                
+                mat_data = m_teach[sel_doc_id].T
+                df_viz = pd.DataFrame(mat_data, index=idx_horas, columns=cols_dias)
+                
+                st.subheader(f"Matriz de Conflictos: {get_docente_name(bundle, sel_doc_id)}")
+                st.dataframe(style_conflict_matrix(df_viz), height=600)
+
+    # 4. HORARIO POR CICLO
     elif page == "Horario por Ciclo":
         st.header("📅 Horario por Ciclo Académico")
         if not st.session_state.get("has_run", False):
@@ -553,7 +638,7 @@ def main():
                 df_c = create_schedule_matrix(best, offers, bundle, "Ciclo", sel_ciclo, dias_map, horas_map)
                 st.markdown(df_c.to_html(escape=False, classes="schedule-table"), unsafe_allow_html=True)
 
-    # 4. HORARIO POR AULA
+    # 5. HORARIO POR AULA
     elif page == "Horario por Aula":
         st.header("🏫 Horario por Aula/Ambiente")
         if not st.session_state.get("has_run", False):
@@ -569,7 +654,7 @@ def main():
                 df_a = create_schedule_matrix(best, offers, bundle, "Aula", sel_aula, dias_map, horas_map)
                 st.markdown(df_a.to_html(escape=False, classes="schedule-table"), unsafe_allow_html=True)
 
-    # 5. HORARIOS EN GENERAL
+    # 6. HORARIOS EN GENERAL
     elif page == "Horarios en General":
         st.header("✅ Tabla de Resultados Finales")
         if not st.session_state.get("has_run", False):
