@@ -8,7 +8,6 @@ import random
 from src.data_loader import load_data
 from src.config import GAConfig, TURN_SLOTS
 from src.domains import build_offer_domains
-# Usamos la población inicial estándar (Probabilística/Aleatoria)
 from src.initial_population import build_initial_population, random_gene_for_offer
 from src.ga import GeneticSolver
 from src.evaluation import evaluate
@@ -17,7 +16,7 @@ from run import build_offers, build_baseline_lab, to_binary_string, day_to_bitma
 # --- CONFIGURACIÓN DE PÁGINA ---
 st.set_page_config(page_title="Sistema de Horarios FIIS", layout="wide", initial_sidebar_state="expanded")
 
-# --- ESTILOS CSS ---
+# --- ESTILOS CSS MEJORADOS ---
 st.markdown("""
     <style>
     .stButton>button {
@@ -36,7 +35,7 @@ st.markdown("""
     .styled-table {
         border-collapse: collapse;
         margin: 10px 0;
-        font-size: 0.85em;
+        font-size: 0.8em;
         font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
         min-width: 400px;
         width: 100%;
@@ -51,21 +50,18 @@ st.markdown("""
         font-weight: bold;
     }
     .styled-table th, .styled-table td {
-        padding: 8px 12px;
+        padding: 6px 8px;
+        border: 1px solid #ddd;
     }
     .styled-table tbody tr {
-        border-bottom: 1px solid #dddddd;
         background-color: #ffffff;
         color: #333;
     }
     .styled-table tbody tr:nth-of-type(even) {
         background-color: #f3f3f3;
     }
-    .styled-table tbody tr:last-of-type {
-        border-bottom: 2px solid #009879;
-    }
     .scroll-table-container {
-        height: 300px;
+        max-height: 400px;
         overflow-y: auto;
         border: 1px solid #ddd;
         background-color: #fff;
@@ -112,13 +108,14 @@ st.markdown("""
         border-radius: 4px;
     }
     .subpop-header {
-        background-color: #eee;
+        background-color: #333;
+        color: #fff;
         padding: 8px;
         font-weight: bold;
-        color: #333;
-        border-left: 5px solid #009879;
+        font-size: 14px;
         margin-top: 15px;
-        margin-bottom: 5px;
+        margin-bottom: 0px;
+        border-radius: 5px 5px 0 0;
     }
     </style>
 """, unsafe_allow_html=True)
@@ -209,16 +206,16 @@ def get_conflict_matrices(individual, offers, bundle):
     
     return count_cycle, count_room, count_teach
 
-# --- HELPER: CÁLCULO DINÁMICO DE PENALIDADES ---
+# --- HELPER: CÁLCULO DINÁMICO DE PENALIDADES (GLOBAL) ---
 def calculate_dynamic_details(individual, offers, bundle):
     count_cycle, count_room, count_teach = get_conflict_matrices(individual, offers, bundle)
     cfg = GAConfig()
-    TOTAL_SLOTS = 17
     
     gene_stats = []
     penalties_docente = []
     penalties_doc_ciclo = []
     penalties_doc_aula = []
+    total_fitness_sum = 0.0
     
     for i, (g, off) in enumerate(zip(individual.genes, offers)):
         pen_gen = 0
@@ -229,7 +226,7 @@ def calculate_dynamic_details(individual, offers, bundle):
         
         # Bloque 1
         for h in range(g.start1, g.start1 + g.len1):
-            if h < TOTAL_SLOTS and g.days[0] < 6:
+            if h < 17 and g.days[0] < 6:
                 if count_cycle[cyc, g.days[0], h] > 1: pen_cycle += cfg.W_CONFLICT_CYCLE
                 if count_room[g.room1, g.days[0], h] > 1: pen_room += cfg.W_CONFLICT_ROOM
                 if count_teach[g.teacher_id, g.days[0], h] > 1: pen_teacher += cfg.W_CONFLICT_TEACHER
@@ -237,13 +234,15 @@ def calculate_dynamic_details(individual, offers, bundle):
         # Bloque 2
         if len(g.days) > 1 and g.room2 is not None:
             for h in range(g.start2, g.start2 + g.len2):
-                if h < TOTAL_SLOTS and g.days[1] < 6:
+                if h < 17 and g.days[1] < 6:
                     if count_cycle[cyc, g.days[1], h] > 1: pen_cycle += cfg.W_CONFLICT_CYCLE
                     if count_room[g.room2, g.days[1], h] > 1: pen_room += cfg.W_CONFLICT_ROOM
                     if count_teach[g.teacher_id, g.days[1], h] > 1: pen_teacher += cfg.W_CONFLICT_TEACHER
         
         pen_gen = pen_cycle + pen_room + pen_teacher
-        aptitud = 1.0 / (1.0 + pen_gen)
+        aptitud = 1.0 / (1.0 + float(pen_gen))
+        
+        total_fitness_sum += aptitud
         
         gene_stats.append({"idx": i, "penal": pen_gen, "aptitud": aptitud})
         
@@ -252,10 +251,10 @@ def calculate_dynamic_details(individual, offers, bundle):
         if pen_cycle > 0: penalties_doc_ciclo.append(f"{off.cod_curso} (Ciclo {off.ciclo}): {pen_cycle}")
         if pen_room > 0: penalties_doc_aula.append(f"{off.cod_curso} {doc_code}: {pen_room}")
 
-    return gene_stats, 0, penalties_docente, penalties_doc_ciclo, penalties_doc_aula
+    return gene_stats, total_fitness_sum, penalties_docente, penalties_doc_ciclo, penalties_doc_aula
 
 # --- LOGICA DE EVOLUCIÓN OPTIMIZADA (TORNEO) ---
-def tournament_selection(population, k=5):
+def tournament_selection(population, k=4):
     candidates = random.sample(population, k)
     return max(candidates, key=lambda x: x.fitness)
 
@@ -266,21 +265,21 @@ def smart_mutate(individual, offers, domains, mutation_rate, cfg):
     idx = random.randint(0, len(individual.genes) - 1)
     if individual.genes[idx].frozen: return
 
-    # Mutación simple (aleatoria) para mantener diversidad y no caer en mínimos locales
+    # Mutación simple
     new_gene = random_gene_for_offer(offers[idx], domains[idx], cfg.N_SLOTS_PER_DAY)
     individual.genes[idx] = new_gene
 
 def run_smart_generation(solver, population, mutation_rate, offers, cfg):
     pop_size = len(population)
-    elite_count = int(pop_size * 0.20)
-    if elite_count < 2: elite_count = 2
+    elite_count = int(pop_size * 0.10)
+    if elite_count < 1: elite_count = 1
     
     population.sort(key=lambda x: x.fitness, reverse=True)
     new_pop = [copy.deepcopy(ind) for ind in population[:elite_count]]
     
     while len(new_pop) < pop_size:
-        p1 = tournament_selection(population, k=5)
-        p2 = tournament_selection(population, k=5)
+        p1 = tournament_selection(population, k=4)
+        p2 = tournament_selection(population, k=4)
         
         child = solver.crossover_subpopulations(p1, p2)
         smart_mutate(child, offers, solver.domains, mutation_rate, cfg)
@@ -306,7 +305,6 @@ def main():
     if 'best_ind' not in st.session_state: st.session_state.best_ind = None
     if 'initial_pop_list' not in st.session_state: st.session_state.initial_pop_list = None 
 
-    # Forzamos 17 slots para evitar errores de índice en turno noche
     APP_CONFIG = GAConfig(N_SLOTS_PER_DAY=17) 
 
     with st.sidebar:
@@ -371,13 +369,13 @@ def main():
                 
                 domains = build_offer_domains(offers, aulas_calc, bundle.docentes, TURN_SLOTS, 6, baseline)
                 
-                # USAMOS LA INICIALIZACIÓN ESTÁNDAR (ALEATORIA)
+                # INICIALIZACIÓN PROBABILÍSTICA (ALEATORIA)
                 initial_pop = build_initial_population(offers, domains, APP_CONFIG.N_SLOTS_PER_DAY, 102)
                 
                 n_cycles = 10
                 n_rooms = int(bundle.aulas["room_id"].max()) + 1
                 n_teachers = int(bundle.docentes["teacher_id"].max()) + 1
-                
+                cfg = GAConfig()
                 for ind in initial_pop:
                     evaluate(ind, offers, n_cycles, n_rooms, n_teachers, APP_CONFIG)
                 
@@ -432,7 +430,7 @@ def main():
                 if c1.button("🔄 Altera Poblac. Inicial (Reset)"):
                     with st.spinner("Reiniciando población (Aleatoria)..."):
                         pop_size = 102
-                        # Usar build_initial_population (Aleatoria)
+                        # INICIALIZACIÓN PROBABILÍSTICA (ALEATORIA)
                         new_pop = build_initial_population(offers, solver.domains, cfg.N_SLOTS_PER_DAY, pop_size)
                         for ind in new_pop:
                             evaluate(ind, offers, solver.n_cycles, solver.n_rooms, solver.n_teachers, cfg)
@@ -496,68 +494,130 @@ def main():
 
             st.write("---")
             best = st.session_state.best_ind
+            # Calculamos detalles globales primero
             gene_stats, total_fit_sum, pen_doc, pen_ciclo, pen_aula = calculate_dynamic_details(best, offers, bundle)
 
             # 1. DETALLE POR CURSO
             st.subheader("1. Detalle por curso")
+            
+            # Encabezados actualizados
             html_main = """<table class="styled-table"><thead><tr>
-            <th>Curso</th><th>Grupo</th><th>Docente</th><th>Cromosoma (Docente | Días | Aula | Hora)</th><th>Penal</th><th>Aptitud</th><th>P.Selec</th><th>P.Acumul</th>
+            <th>Curso</th><th>Grupo</th><th>Docente</th><th>Cromosoma</th><th>Penal</th><th>Aptitud</th><th>D.G.</th><th>P.Selec</th><th>P.Acumul</th>
             </tr></thead><tbody>"""
+            
             p_acum = 0.0
+            
             for stat in gene_stats:
                 idx = stat['idx']
                 g = best.genes[idx]
                 off = offers[idx]
                 doc_code = get_docente_code(bundle, g.teacher_id)
+                
+                # --- CONSTRUCCIÓN DEL CROMOSOMA (Todos los bits separados) ---
                 bits_doc = to_binary_string(g.teacher_id, 6)
                 bits_dias = day_to_bitmask(g.days)
-                bits_b1 = f"{to_binary_string(g.room1, 4)}{to_binary_string(g.start1, 5)}"
-                bits_b2 = f" {to_binary_string(g.room2, 4)}{to_binary_string(g.start2, 5)}" if (len(g.days)>1 and g.room2 is not None) else " 000000000"
-                full_bits = f"{bits_doc} {bits_dias} {bits_b1}{bits_b2}"
+                
+                # Bloque 1
+                bits_aula1 = to_binary_string(g.room1, 4)
+                bits_hora1 = to_binary_string(g.start1, 5)
+                
+                # Bloque 2 (si existe)
+                if len(g.days) > 1 and g.room2 is not None:
+                    bits_aula2 = to_binary_string(g.room2, 4)
+                    bits_hora2 = to_binary_string(g.start2, 5)
+                else:
+                    bits_aula2 = "0000"
+                    bits_hora2 = "00000"
+                
+                # Unimos todo en una sola cadena separada por espacios
+                full_bits = f"{bits_doc} {bits_dias} {bits_aula1} {bits_hora1} {bits_aula2} {bits_hora2}"
+                
+                # Cálculos de probabilidad
                 p_selec = stat['aptitud'] / total_fit_sum if total_fit_sum > 0 else 0.0
                 p_acum += p_selec
-                html_main += f"""<tr><td>{off.cod_curso}</td><td>{off.grupo_horario}</td><td>{doc_code}</td><td style='font-family:monospace'>{full_bits}</td><td>{int(stat['penal'])}</td><td>{stat['aptitud']:.5f}</td><td>{p_selec:.5f}</td><td>{p_acum:.5f}</td></tr>"""
+                
+                html_main += f"""<tr>
+                <td>{off.cod_curso}</td><td>{off.grupo_horario}</td><td>{doc_code}</td>
+                <td style='font-family:monospace; font-size:0.9em'>{full_bits}</td>
+                <td>{int(stat['penal'])}</td>
+                <td>{stat['aptitud']:.6f}</td>
+                <td>{total_fit_sum:.2f}</td>
+                <td>{p_selec:.6f}</td>
+                <td>{p_acum:.6f}</td>
+                </tr>"""
             html_main += "</tbody></table>"
             st.markdown(f"<div class='scroll-table-container'>{html_main}</div>", unsafe_allow_html=True)
 
-            # 2. SUBPOBLACIONES
+           # 2. SUBPOBLACIONES
             st.subheader("2. Subpoblaciones")
             
             def render_subpop_table(turno_key, title):
-                # Si no hay datos, retornar placeholder vacío
-                if turno_key not in solver.subpopulations:
-                    return ""
+                if turno_key not in solver.subpopulations: return ""
                 
-                # HTML para la tabla del bloque específico
-                html = f"""
-                <div class="subpop-header">{title}</div>
-                <div class="scroll-table-container" style="height:200px;">
-                <table class="styled-table" style="margin-top:0;">
-                <thead><tr><th>Carga</th><th>Curso</th><th>Grupo</th><th>Docente</th><th>Cromosoma (Bits)</th><th>P.Sel</th></tr></thead>
-                <tbody>
-                """
+                full_html = f"<div class='subpop-header'>{title}</div>"
                 
-                has_rows = False
                 for horas, idxs in solver.subpopulations[turno_key].items():
+                    # 1. Calcular D.G. Local (Suma de aptitudes de ESTE grupo)
+                    local_fit_sum = 0.0
+                    local_rows_data = []
+                    
                     for idx in idxs:
-                        has_rows = True
                         stat = next((s for s in gene_stats if s['idx'] == idx), None)
-                        if not stat: continue
+                        if stat: 
+                            local_fit_sum += stat['aptitud']
+                            local_rows_data.append((idx, stat))
+                    
+                    if not local_rows_data: continue
+
+                    # 2. Construir tabla
+                    # NOTA: Ahora la columna dice 'D.G. (Local)' y usa 'local_fit_sum'
+                    html = f"""<div style='font-size:12px; font-weight:bold; margin:5px 0; color:#555;'>► Grupo de {horas} Horas</div>
+                    <div class="scroll-table-container" style="height:auto; max_height:200px; margin-bottom:15px;">
+                    <table class="styled-table" style="margin-top:0;">
+                    <thead><tr>
+                        <th>Carga</th><th>Curso</th><th>Grupo</th><th>Docente</th>
+                        <th>Cromosoma</th>
+                        <th>Penal</th><th>Aptitud</th><th>D.G. (Local)</th> <th>P.Sel (Local)</th><th>P.Acum (Local)</th>
+                    </tr></thead><tbody>"""
+                    
+                    p_acum_local = 0.0
+                    for idx, stat in local_rows_data:
                         g = best.genes[idx]
                         off = offers[idx]
                         doc_code = get_docente_code(bundle, g.teacher_id)
-                        bits = f"{to_binary_string(g.teacher_id, 6)} {day_to_bitmask(g.days)}..."
-                        p_sel = stat['aptitud'] / total_fit_sum if total_fit_sum > 0 else 0.0
+                        
+                        # Construcción del Cromosoma
+                        bits_doc = to_binary_string(g.teacher_id, 6)
+                        bits_dias = day_to_bitmask(g.days)
+                        bits_aula1 = to_binary_string(g.room1, 4)
+                        bits_hora1 = to_binary_string(g.start1, 5)
+                        
+                        if len(g.days) > 1 and g.room2 is not None:
+                            bits_aula2 = to_binary_string(g.room2, 4)
+                            bits_hora2 = to_binary_string(g.start2, 5)
+                        else:
+                            bits_aula2 = "0000"
+                            bits_hora2 = "00000"
+                            
+                        full_bits_sub = f"{bits_doc} {bits_dias} {bits_aula1} {bits_hora1} {bits_aula2} {bits_hora2}"
+                        
+                        # Cálculos Locales
+                        p_sel_local = stat['aptitud'] / local_fit_sum if local_fit_sum > 0 else 0.0
+                        p_acum_local += p_sel_local
                         
                         html += f"""<tr>
                         <td>{horas} Hrs</td><td>{off.cod_curso}</td><td>{off.grupo_horario}</td>
-                        <td>{doc_code}</td><td style='font-family:monospace'>{bits}</td><td>{p_sel:.5f}</td>
+                        <td>{doc_code}</td>
+                        <td style='font-family:monospace; font-size: 0.85em;'>{full_bits_sub}</td>
+                        <td>{int(stat['penal'])}</td>
+                        <td>{stat['aptitud']:.6f}</td>
+                        <td>{local_fit_sum:.2f}</td> <td>{p_sel_local:.6f}</td><td>{p_acum_local:.6f}</td>
                         </tr>"""
+                    html += "</tbody></table></div>"
+                    full_html += html
                 
-                html += "</tbody></table></div>"
-                return html if has_rows else f"<div class='subpop-header'>{title} (Sin datos)</div>"
+                return full_html
 
-            # Renderizar los 3 bloques
             st.markdown(render_subpop_table("M", "Turno Mañana"), unsafe_allow_html=True)
             st.markdown(render_subpop_table("T", "Turno Tarde"), unsafe_allow_html=True)
             st.markdown(render_subpop_table("N", "Turno Noche"), unsafe_allow_html=True)
