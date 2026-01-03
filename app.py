@@ -314,6 +314,7 @@ def main():
             "Realizar Asignación", 
             "Procesos Adicionales", 
             "Matrices de Conflictos",
+            "Editor Manual",
             "Horario por Ciclo", 
             "Horario por Aula", 
             "Horarios en General"
@@ -695,6 +696,179 @@ def main():
                 mat_data = m_teach[sel_doc_id].T
                 df_viz = pd.DataFrame(mat_data, index=idx_horas, columns=cols_dias)
                 st.dataframe(style_conflict_matrix(df_viz), height=600, use_container_width=True)
+
+    # 3.5 EDITOR MANUAL (V4 - LIMPIO Y CON CÓDIGOS)
+    elif page == "Editor Manual":
+        st.header("Editor Manual de Horarios")
+        st.markdown("""
+        **Guía de uso:**
+        1. Seleccione el Ciclo.
+        2. Seleccione el curso a corregir (Ordenado por gravedad del conflicto).
+        3. Mueva el horario a un hueco libre para eliminar la penalidad.
+        """)
+
+        if not st.session_state.get("has_run", False):
+            st.warning("Primero ejecute 'CREAR POBLACIÓN INICIAL' en la pestaña 'Realizar Asignación'.")
+        else:
+            # Recuperar variables necesarias
+            solver = st.session_state.solver
+            best = st.session_state.best_ind
+            offers = st.session_state.offers
+            bundle = st.session_state.bundle
+            cfg = GAConfig(N_SLOTS_PER_DAY=17)
+
+            # 1. Recalcular estado actual
+            gene_stats, _, pen_doc, pen_cyc, pen_room = calculate_dynamic_details(best, offers, bundle)
+            
+            # Datos auxiliares
+            aulas_dict = dict(zip(bundle.aulas["room_id"], bundle.aulas["cod_aula"]))
+            horas_dict = dict(zip(bundle.horas["slot_id"], bundle.horas["rango_hora"]))
+            dias_list = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado"]
+
+            # --- BARRA DE FILTROS ---
+            col_check, _ = st.columns([2, 1])
+            show_conflicts_only = col_check.checkbox("Mostrar solo cursos con conflictos activos", value=True)
+
+            st.divider()
+            
+            # --- SELECCIÓN JERÁRQUICA ---
+            col_ciclo, col_curso = st.columns([1, 2])
+
+            # PASO 1: SELECCIONAR CICLO
+            all_cycles = sorted(list(set(o.ciclo for o in offers)))
+            sel_ciclo = col_ciclo.selectbox("1. Seleccione Ciclo:", all_cycles)
+
+            # PASO 2: LISTA DE CURSOS (LIMPIA Y CON CÓDIGOS)
+            options_data = []
+            
+            for stat in gene_stats:
+                idx = stat['idx']
+                penal = stat['penal']
+                off = offers[idx]
+                
+                # Filtros
+                if off.ciclo != sel_ciclo: continue
+                if show_conflicts_only and penal == 0: continue
+                
+                gene = best.genes[idx]
+                doc_code = get_docente_code(bundle, gene.teacher_id)
+                doc_name = get_docente_name(bundle, gene.teacher_id)
+                
+                # Analizar criticidad para el ordenamiento (oculto al usuario)
+                keyword = f"{off.cod_curso}"
+                has_room_error = any(keyword in p for p in pen_room)
+                has_doc_error = any((keyword in p and doc_code in p) for p in pen_doc)
+                is_critical = has_room_error or has_doc_error
+
+                # ETIQUETA LIMPIA: [C01] Nombre... | Doc: [D01] Nombre... | Pen: 10
+                label = f"[{off.cod_curso}] {off.nombre} ({off.grupo_horario}) | Doc: [{doc_code}] {doc_name} | Pen: {int(penal)}"
+                
+                options_data.append({
+                    "label": label,
+                    "idx": idx,
+                    "is_critical": is_critical,
+                    "penal": penal
+                })
+
+            # Ordenar: Primero Críticos, luego por mayor penalidad
+            options_data.sort(key=lambda x: (not x['is_critical'], -x['penal']))
+            
+            course_map = {item["label"]: item["idx"] for item in options_data}
+
+            sel_idx = None
+            with col_curso:
+                if not course_map:
+                    st.selectbox("2. Seleccione Curso:", ["(No hay conflictos en este ciclo)"], disabled=True)
+                else:
+                    sel_label = st.selectbox(f"2. Seleccione Curso ({len(course_map)}):", list(course_map.keys()))
+                    sel_idx = course_map[sel_label]
+
+            # --- ÁREA DE EDICIÓN ---
+            if sel_idx is not None:
+                idx = sel_idx
+                gene = best.genes[idx]
+                off = offers[idx]
+                
+                st.markdown("---")
+                
+                # === DIAGNÓSTICO (TEXTO PLANO) ===
+                doc_code_actual = get_docente_code(bundle, gene.teacher_id)
+                keyword = f"{off.cod_curso}"
+                
+                err_room = [p for p in pen_room if keyword in p]
+                err_doc = [p for p in pen_doc if keyword in p and doc_code_actual in p]
+                err_cyc = [p for p in pen_cyc if keyword in p]
+
+                c_diag, c_form = st.columns([1, 2])
+                
+                with c_diag:
+                    st.subheader("Diagnóstico")
+                    if not (err_room or err_doc or err_cyc):
+                        st.success("Curso sin conflictos detectados.")
+                    else:
+                        if err_room:
+                            st.error(f"CONFLICTO DE AULA\nEl aula asignada ya está ocupada en ese horario.")
+                        if err_doc:
+                            st.error(f"CONFLICTO DE DOCENTE\nEl profesor {doc_code_actual} tiene cruce de horario.")
+                        if err_cyc:
+                            st.warning(f"CONFLICTO DE CICLO\nSe cruza con otro curso del mismo ciclo.")
+
+                # === FORMULARIO ===
+                with c_form:
+                    with st.form("manual_edit_form"):
+                        st.markdown(f"**Editando:** [{off.cod_curso}] {off.nombre} - {off.grupo_horario}")
+                        
+                        col_b1, col_b2 = st.columns(2)
+                        
+                        # BLOQUE 1
+                        with col_b1:
+                            st.info("Sesión 1")
+                            new_day1 = st.selectbox("Día", range(6), index=gene.days[0], format_func=lambda x: dias_list[x], key="d1")
+                            new_start1 = st.selectbox("Hora Inicio", range(17), index=gene.start1, format_func=lambda x: horas_dict.get(x, str(x)), key="h1")
+                            
+                            room_ids = list(aulas_dict.keys())
+                            curr_room = gene.room1
+                            idx_r1 = room_ids.index(curr_room) if curr_room in room_ids else 0
+                            new_room1 = st.selectbox("Aula", room_ids, index=idx_r1, format_func=lambda x: aulas_dict[x], key="r1")
+                            
+                            st.caption(f"Duración: {gene.len1} hrs")
+
+                        # BLOQUE 2 (Opcional)
+                        new_day2, new_start2, new_room2 = None, None, None
+                        if len(gene.days) > 1 and gene.room2 is not None:
+                            with col_b2:
+                                st.info("Sesión 2")
+                                new_day2 = st.selectbox("Día", range(6), index=gene.days[1], format_func=lambda x: dias_list[x], key="d2")
+                                new_start2 = st.selectbox("Hora Inicio", range(17), index=gene.start2, format_func=lambda x: horas_dict.get(x, str(x)), key="h2")
+                                
+                                curr_room2 = gene.room2
+                                idx_r2 = room_ids.index(curr_room2) if curr_room2 in room_ids else 0
+                                new_room2 = st.selectbox("Aula", room_ids, index=idx_r2, format_func=lambda x: aulas_dict[x], key="r2")
+                                
+                                st.caption(f"Duración: {gene.len2} hrs")
+
+                        st.write("")
+                        btn_save = st.form_submit_button("GUARDAR SOLUCIÓN Y RECALCULAR", type="primary")
+                        
+                        if btn_save:
+                            # Aplicar cambios en memoria
+                            dias_nuevos = [new_day1]
+                            if new_day2 is not None: dias_nuevos.append(new_day2)
+                            
+                            gene.days = tuple(dias_nuevos)
+                            gene.room1 = new_room1
+                            gene.start1 = new_start1
+                            
+                            if new_day2 is not None:
+                                gene.room2 = new_room2
+                                gene.start2 = new_start2
+                            
+                            # Recalcular penalidad global
+                            evaluate(best, offers, solver.n_cycles, solver.n_rooms, solver.n_teachers, cfg)
+                            st.session_state.best_ind = best
+                            
+                            st.success(f"¡Guardado! Nueva Penalidad Global: {int(best.penalty)}")
+                            st.rerun()
 
     # 4. HORARIO POR CICLO
     elif page == "Horario por Ciclo":
