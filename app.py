@@ -136,10 +136,10 @@ def get_room_code(bundle, room_id):
     row = bundle.aulas[bundle.aulas["room_id"] == room_id]
     return row.iloc[0]['cod_aula'] if not row.empty else f"Aula {room_id}"
 
-def get_html_card(nombre, grupo, docente, aula, tipo):
+def get_html_card(nombre, grupo, docente, aula, tipo, ciclo):
     return (
         f"<div style='border:1px solid #ccc; margin-bottom:4px; font-family:sans-serif; overflow:hidden; border-radius:3px;'>"
-        f"<div style='background-color:#e0f7fa; color:#006064; padding:2px 4px; font-size:10px; font-weight:bold; border-bottom:1px solid #b2ebf2;'>{nombre}</div>"
+        f"<div style='background-color:#e0f7fa; color:#006064; padding:2px 4px; font-size:10px; font-weight:bold; border-bottom:1px solid #b2ebf2;'>{nombre} (C{ciclo})</div>"
         f"<div style='background-color:#fff; color:#333; padding:2px 4px; font-size:9px;'><b>{grupo}</b> {docente}<br>{aula} ({tipo})</div>"
         f"</div>"
     )
@@ -158,13 +158,15 @@ def create_schedule_matrix(best_ind, offers, bundle, filter_mode, filter_val, di
         doc_code = get_docente_code(bundle, g.teacher_id)
         room1_code = get_room_code(bundle, g.room1)
         
+        # Bloque 1
         if filter_mode == "Ciclo" or g.room1 == filter_val:
             for d in [g.days[0]]:
                 if 0 <= d < 6:
                     for h in range(g.start1, g.start1 + g.len1):
                         if 0 <= h < TOTAL_SLOTS:
-                            matrix[h, d] += get_html_card(off.nombre, off.grupo_horario, doc_code, room1_code, off.tipo_hora)
+                            matrix[h, d] += get_html_card(off.nombre, off.grupo_horario, doc_code, room1_code, off.tipo_hora, off.ciclo)
         
+        # Bloque 2
         if len(g.days) > 1 and g.room2 is not None:
             if filter_mode == "Ciclo" or g.room2 == filter_val:
                 room2_code = get_room_code(bundle, g.room2)
@@ -172,7 +174,7 @@ def create_schedule_matrix(best_ind, offers, bundle, filter_mode, filter_val, di
                     if 0 <= d < 6:
                         for h in range(g.start2, g.start2 + g.len2):
                             if 0 <= h < TOTAL_SLOTS:
-                                matrix[h, d] += get_html_card(off.nombre, off.grupo_horario, doc_code, room2_code, off.tipo_hora)
+                                matrix[h, d] += get_html_card(off.nombre, off.grupo_horario, doc_code, room2_code, off.tipo_hora, off.ciclo)
     
     cols = [dias_map.get(i, f"Dia {i}") for i in range(6)]
     df_mat = pd.DataFrame(matrix, columns=cols)
